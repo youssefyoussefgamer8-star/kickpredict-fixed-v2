@@ -1,0 +1,5 @@
+{
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "https://kickpredict-6m38.onrender.com/api/:path*" }
+  ]
+}
