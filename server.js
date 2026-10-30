@@ -940,7 +940,7 @@ app.use((err, _req, res, _next) => {
 
 // Match/result sync: every 10 minutes by default. The per-competition delay respects the
 // football-data.org free-tier rate limit.
-const SYNC_CRON = process.env.SYNC_CRON || '*/10 * * * *';
+const SYNC_CRON = process.env.SYNC_CRON || '*/1 * * * *';
 if (!cron.validate(SYNC_CRON)) {
   console.error(`[FATAL] Invalid SYNC_CRON expression: ${SYNC_CRON}`);
 } else {
