@@ -199,8 +199,16 @@ export default function MatchCard({ match, user, lang, t, boostsLeft, onSaved, o
             ) : (
               <span className="kp-status-upcoming">{lang === 'ar' ? 'لم تبدأ' : 'UPCOMING'}</span>
             )}
-            {match.status && !['TIMED', 'SCHEDULED', 'FINISHED'].includes(match.status) && (
-              <span className="kp-status-code">{match.status}</span>
+            {!finished && (match.live_clock || (match.status && !['TIMED', 'SCHEDULED', 'FINISHED'].includes(match.status))) && (
+              <span className="kp-status-code">
+                {match.live_clock === 'HT' || match.status === 'PAUSED'
+                  ? lang === 'ar'
+                    ? 'استراحة (HT)'
+                    : 'HT'
+                  : match.live_clock
+                  ? `⏱ ${match.live_clock}`
+                  : match.status}
+              </span>
             )}
           </div>
           <button

@@ -294,6 +294,176 @@ app.get(
 );
 
 // ---------------------------------------------------------------------------
+// 3b. Live Match Clock & Real-Time Score Helper (ESPN Public Scoreboard API)
+// ---------------------------------------------------------------------------
+const ESPN_LEAGUE_SLUGS = {
+  PL: 'eng.1',
+  PD: 'esp.1',
+  BL1: 'ger.1',
+  SA: 'ita.1',
+  FL1: 'fra.1',
+  CL: 'uefa.champions',
+  TU1: 'tun.1'
+};
+
+const espnLiveCache = new Map();
+const ESPN_CACHE_TTL_MS = 20 * 1000; // 20 seconds cache
+
+function normalizeTeamTokens(name) {
+  if (!name) return [];
+  const clean = String(name)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ');
+  const stopWords = new Set([
+    'fc', 'cf', 'sc', 'ac', 'rc', 'as', 'ud', 'cd', 'sd', 'ca', 'ss', 'ssc',
+    'real', 'club', 'deportivo', 'athletic', 'atletico', 'stade', 'olympique',
+    'borussia', 'bayer', 'rb', 'vfl', 'vfb', 'tsg', 'fsv', '1', 'de', 'la', 'le', 'los', 'el', 'al'
+  ]);
+  const tokens = clean.split(/\s+/).filter((w) => w.length >= 2 && !stopWords.has(w));
+  return tokens.length > 0 ? tokens : clean.split(/\s+/).filter(Boolean);
+}
+
+function teamsSimilarity(dbName, espnCompetitor) {
+  if (!dbName || !espnCompetitor || !espnCompetitor.team) return 0;
+  const t = espnCompetitor.team;
+  const candidates = [t.displayName, t.shortDisplayName, t.name, t.abbreviation, t.location].filter(Boolean);
+  const dbLower = String(dbName).toLowerCase().trim();
+  for (const c of candidates) {
+    if (String(c).toLowerCase().trim() === dbLower) return 10;
+  }
+  const dbTokens = normalizeTeamTokens(dbName);
+  let best = 0;
+  for (const c of candidates) {
+    const cTokens = normalizeTeamTokens(c);
+    for (const dt of dbTokens) {
+      for (const ct of cTokens) {
+        if (dt === ct) best = Math.max(best, 6);
+        else if (dt.length >= 3 && ct.length >= 3 && (dt.startsWith(ct) || ct.startsWith(dt))) {
+          best = Math.max(best, 4);
+        }
+      }
+    }
+  }
+  return best;
+}
+
+function formatEspnClock(statusObj) {
+  if (!statusObj) return null;
+  const typeName = statusObj.type?.name || '';
+  const shortDetail = statusObj.type?.shortDetail || '';
+  if (typeName === 'STATUS_HALFTIME' || shortDetail === 'HT') {
+    return 'HT';
+  }
+  const rawClock = String(statusObj.displayClock || shortDetail || '').trim();
+  if (!rawClock || rawClock === "0'" || rawClock === '0:00') return null;
+  // Normalize e.g. "45'+3'" -> "45+3'"
+  return rawClock.replace(/'\+/g, '+');
+}
+
+function computeFallbackLiveClock(utcDate, status) {
+  if (status === 'PAUSED') return 'HT';
+  if (status !== 'IN_PLAY') return null;
+  const elapsed = Math.floor((Date.now() - new Date(utcDate).getTime()) / 60000);
+  if (!Number.isFinite(elapsed) || elapsed < 0 || elapsed > 150) return null;
+  if (elapsed <= 45) return `${Math.max(1, elapsed)}'`;
+  if (elapsed <= 53) return `45+${elapsed - 45}'`;
+  if (elapsed <= 62) return 'HT';
+  const secondHalfMin = elapsed - 17;
+  if (secondHalfMin <= 90) return `${Math.max(46, secondHalfMin)}'`;
+  if (secondHalfMin <= 105) return `90+${secondHalfMin - 90}'`;
+  return "90+'";
+}
+
+async function fetchEspnScoreboard(competition) {
+  const slug = ESPN_LEAGUE_SLUGS[competition];
+  if (!slug) return [];
+  const cached = espnLiveCache.get(competition);
+  if (cached && Date.now() - cached.ts < ESPN_CACHE_TTL_MS) {
+    return cached.events;
+  }
+  try {
+    const res = await fetch(
+      `https://site.api.espn.com/apis/site/v2/sports/soccer/${slug}/scoreboard`,
+      { signal: AbortSignal.timeout(4000) }
+    );
+    if (!res.ok) return cached ? cached.events : [];
+    const data = await res.json();
+    const events = Array.isArray(data.events) ? data.events : [];
+    espnLiveCache.set(competition, { ts: Date.now(), events });
+    return events;
+  } catch (_err) {
+    return cached ? cached.events : [];
+  }
+}
+
+function enrichMatchWithLiveClock(m, espnEvents) {
+  if (m.status === 'FINISHED') {
+    return { ...m, live_clock: 'FT' };
+  }
+  let liveClock = null;
+  let liveStatus = m.status;
+  let liveHomeScore = m.home_score;
+  let liveAwayScore = m.away_score;
+
+  if (Array.isArray(espnEvents) && espnEvents.length > 0 && m.utc_date) {
+    const mTime = new Date(m.utc_date).getTime();
+    let bestEvent = null;
+    let bestScore = 0;
+
+    for (const ev of espnEvents) {
+      const evTime = new Date(ev.date).getTime();
+      if (Math.abs(evTime - mTime) > 45 * 60 * 1000) continue;
+      const comp = ev.competitions && ev.competitions[0];
+      const competitors = (comp && comp.competitors) || [];
+      const homeComp = competitors.find((c) => c.homeAway === 'home') || competitors[0];
+      const awayComp = competitors.find((c) => c.homeAway === 'away') || competitors[1];
+      const sim = teamsSimilarity(m.home_team, homeComp) + teamsSimilarity(m.away_team, awayComp);
+      if (sim > bestScore) {
+        bestScore = sim;
+        bestEvent = { ev, homeComp, awayComp };
+      }
+    }
+
+    if (bestEvent && bestScore >= 4) {
+      const { ev, homeComp, awayComp } = bestEvent;
+      const state = ev.status?.type?.state;
+      const typeName = ev.status?.type?.name || '';
+      if (state === 'in') {
+        liveClock = formatEspnClock(ev.status);
+        liveStatus = typeName === 'STATUS_HALFTIME' ? 'PAUSED' : 'IN_PLAY';
+        const hScore = parseInt(homeComp?.score, 10);
+        const aScore = parseInt(awayComp?.score, 10);
+        if (!Number.isNaN(hScore) && !Number.isNaN(aScore)) {
+          liveHomeScore = hScore;
+          liveAwayScore = aScore;
+        }
+      } else if (state === 'post' && !m.settled_outcomes) {
+        const hScore = parseInt(homeComp?.score, 10);
+        const aScore = parseInt(awayComp?.score, 10);
+        if (!Number.isNaN(hScore) && !Number.isNaN(aScore)) {
+          liveHomeScore = hScore;
+          liveAwayScore = aScore;
+        }
+      }
+    }
+  }
+
+  if (!liveClock) {
+    liveClock = computeFallbackLiveClock(m.utc_date, liveStatus);
+  }
+
+  return {
+    ...m,
+    status: liveStatus,
+    home_score: liveHomeScore,
+    away_score: liveAwayScore,
+    live_clock: liveClock
+  };
+}
+
+// ---------------------------------------------------------------------------
 // 4. Competitions + matches
 // ---------------------------------------------------------------------------
 app.get('/api/competitions', (_req, res) => {
@@ -372,22 +542,30 @@ app.get(
       boostsUsed = boostRes.rows[0]?.boosts_used || 0;
     }
 
+    const hasActiveMatches = matches.some(
+      (m) => m.status !== 'FINISHED' && (m.is_locked || ['IN_PLAY', 'PAUSED'].includes(m.status))
+    );
+    const espnEvents = hasActiveMatches ? await fetchEspnScoreboard(competition) : [];
+
     res.json({
       competition,
       rounds,
       round: roundKey,
       maxBoosts: MAX_BOOSTS,
       boostsUsed,
-      matches: matches.map((m) => ({
-        ...m,
-        markets_points:
-          m.markets_points ||
-          buildMarketsPoints(
-            Number(m.home_lambda || DEFAULT_AVG_HOME),
-            Number(m.away_lambda || DEFAULT_AVG_AWAY)
-          ),
-        prediction: userPredictions[m.id] || null
-      }))
+      matches: matches.map((rawMatch) => {
+        const m = enrichMatchWithLiveClock(rawMatch, espnEvents);
+        return {
+          ...m,
+          markets_points:
+            m.markets_points ||
+            buildMarketsPoints(
+              Number(m.home_lambda || DEFAULT_AVG_HOME),
+              Number(m.away_lambda || DEFAULT_AVG_AWAY)
+            ),
+          prediction: userPredictions[m.id] || null
+        };
+      })
     });
   })
 );
@@ -940,7 +1118,7 @@ app.use((err, _req, res, _next) => {
 
 // Match/result sync: every 10 minutes by default. The per-competition delay respects the
 // football-data.org free-tier rate limit.
-const SYNC_CRON = process.env.SYNC_CRON || '*/1 * * * *';
+const SYNC_CRON = process.env.SYNC_CRON || '*/2 * * * *';
 if (!cron.validate(SYNC_CRON)) {
   console.error(`[FATAL] Invalid SYNC_CRON expression: ${SYNC_CRON}`);
 } else {
@@ -988,4 +1166,3 @@ async function shutdown(signal) {
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
-
