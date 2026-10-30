@@ -85,7 +85,7 @@ if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
   console.error('[FATAL] PORT must be an integer between 1 and 65535.');
   process.exit(1);
 }
-const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 5 });
+const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: Number(process.env.DB_POOL_MAX || 10) });
 const app = express();
 const isProduction = process.env.NODE_ENV === 'production' || process.env.RENDER === 'true';
 
@@ -313,6 +313,8 @@ app.get(
       `SELECT round_key,
               MIN(utc_date) AS first_date,
               MAX(utc_date) AS last_date,
+              MIN(utc_date) FILTER (WHERE status IN ('TIMED', 'SCHEDULED') AND utc_date >= NOW() - INTERVAL '3 hours') AS next_upcoming_date,
+              COUNT(*) FILTER (WHERE status IN ('TIMED', 'SCHEDULED') AND utc_date >= NOW() - INTERVAL '3 hours') AS upcoming_count,
               MAX(round_label) AS label
        FROM matches
        WHERE competition_code = $1 AND round_key IS NOT NULL
@@ -330,8 +332,10 @@ app.get(
       req.query.round && rounds.some((r) => r.key === req.query.round) ? String(req.query.round) : null;
 
     if (!roundKey) {
-      const cutoff = Date.now() - 3 * 3600 * 1000;
-      const current = roundsRes.rows.find((r) => new Date(r.last_date).getTime() >= cutoff);
+      const upcomingRounds = roundsRes.rows
+        .filter((r) => Number(r.upcoming_count) > 0 && r.next_upcoming_date)
+        .sort((a, b) => new Date(a.next_upcoming_date) - new Date(b.next_upcoming_date));
+      const current = upcomingRounds.find((r) => Number(r.upcoming_count) >= 2) || upcomingRounds[0];
       roundKey = (current || roundsRes.rows[roundsRes.rows.length - 1]).round_key;
     }
 
@@ -934,9 +938,15 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// Match/result sync: every 10 minutes. The per-competition delay respects the
+// Match/result sync: every 10 minutes by default. The per-competition delay respects the
 // football-data.org free-tier rate limit.
-cron.schedule('* * * * *', syncAll);
+const SYNC_CRON = process.env.SYNC_CRON || '*/10 * * * *';
+if (!cron.validate(SYNC_CRON)) {
+  console.error(`[FATAL] Invalid SYNC_CRON expression: ${SYNC_CRON}`);
+} else {
+  cron.schedule(SYNC_CRON, syncAll);
+  console.log(`[Sync] Scheduled with cron: ${SYNC_CRON}`);
+}
 
 // Odds have their own conservative schedule so they don't consume quota every
 // time match data is refreshed. They are optional and disabled without a key.
