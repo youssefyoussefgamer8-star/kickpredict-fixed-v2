@@ -6,7 +6,12 @@ const {
   roundInfoFromSofaScore,
   smartPollTunisia,
   setCachedSeasonId,
-  sofaFetch
+  sofaFetch,
+  fetchTournamentEvents,
+  extractEventsFromResponse,
+  getRapidApiCandidateEndpoints,
+  setCachedWorkingEndpoint,
+  getCachedWorkingEndpoint
 } = require('./sync-tunisia');
 const { teamRatings, matchLambdas, buildMatchMarketsPoints } = require('./pricingEngine');
 
@@ -44,7 +49,25 @@ assert.strictEqual(liveScore.awayHt, 0);
 const scheduledScore = parseSofaScoreScore(null, null, 'SCHEDULED');
 assert.strictEqual(scheduledScore.home, null);
 assert.strictEqual(scheduledScore.away, null);
-console.log('✓ All Score Parsing tests passed');
+
+// Numeric score format support
+const numericScore = parseSofaScoreScore(3, 1, 'FINISHED');
+assert.strictEqual(numericScore.home, 3);
+assert.strictEqual(numericScore.away, 1);
+
+const zeroZeroScore = parseSofaScoreScore(0, 0, 'IN_PLAY');
+assert.strictEqual(zeroZeroScore.home, 0);
+assert.strictEqual(zeroZeroScore.away, 0);
+console.log('✓ All Score Parsing tests passed (including numeric score formats)');
+
+console.log('--- Testing Flexible Event Extraction from Vendor Responses ---');
+assert.strictEqual(extractEventsFromResponse({ events: [{ id: 101 }] }).length, 1);
+assert.strictEqual(extractEventsFromResponse({ matches: [{ id: 102 }] }).length, 1);
+assert.strictEqual(extractEventsFromResponse({ data: { events: [{ id: 103 }] } }).length, 1);
+assert.strictEqual(extractEventsFromResponse({ data: [{ id: 104 }] }).length, 1);
+assert.strictEqual(extractEventsFromResponse([{ id: 105 }]).length, 1);
+assert.strictEqual(extractEventsFromResponse(null).length, 0);
+console.log('✓ Event extraction across multiple RapidAPI vendor response formats passed');
 
 console.log('--- Testing Round Info Extraction ---');
 const r1 = roundInfoFromSofaScore({ roundInfo: { round: 8, name: 'Round 8' } });
@@ -223,7 +246,7 @@ console.log('--- Testing Aggregated Smart Polling for Concurrent Matches ---');
   assert.strictEqual(reconciledRows.length, 4, 'reconcileScoreCorrections was called with 4 updated rows');
   console.log('✓ All 4 concurrent matches updated, reconciled, and settled accurately from 1 request');
 
-  console.log('--- Testing RapidAPI sofascore-api6 Gateway nativePassThrough Routing ---');
+  console.log('--- Testing Official Dedicated RapidAPI Endpoints & Candidate Fallback ---');
   const originalFetch = global.fetch;
   const originalApiKey = process.env.RAPIDAPI_KEY;
   const originalHost = process.env.RAPIDAPI_SOFA_HOST;
@@ -231,28 +254,105 @@ console.log('--- Testing Aggregated Smart Polling for Concurrent Matches ---');
   try {
     process.env.RAPIDAPI_KEY = 'test-rapidapi-key-12345';
     delete process.env.RAPIDAPI_SOFA_HOST;
+    setCachedWorkingEndpoint(null);
 
-    let calledUrl = null;
-    let calledOptions = null;
-    global.fetch = async (url, options) => {
-      calledUrl = url;
-      calledOptions = options;
-      return {
-        ok: true,
-        json: async () => ({ events: [{ id: 9999 }] })
-      };
+    // Verify candidate lists
+    const lastCandidates = getRapidApiCandidateEndpoints('last');
+    assert.ok(lastCandidates.includes('/tournaments/get-last-matches'));
+    assert.ok(lastCandidates.includes('/tournaments/get-events'));
+    assert.ok(!lastCandidates.includes('/nativePassThrough'), 'Must not contain nativePassThrough');
+
+    const nextCandidates = getRapidApiCandidateEndpoints('next');
+    assert.ok(nextCandidates.includes('/tournaments/get-next-matches'));
+    assert.ok(!nextCandidates.includes('/nativePassThrough'), 'Must not contain nativePassThrough');
+
+    // Simulate fallback: first candidate (/tournaments/get-last-matches) returns 404,
+    // second candidate (/tournaments/get-events) returns 200 with match events
+    const calledUrls = [];
+    const calledOptionsList = [];
+
+    const mockFetchWithFallback = async (url, options) => {
+      calledUrls.push(url);
+      calledOptionsList.push(options);
+
+      const parsedUrl = new URL(url);
+      if (parsedUrl.pathname === '/tournaments/get-last-matches') {
+        return {
+          ok: false,
+          status: 404,
+          statusText: 'Not Found'
+        };
+      }
+      if (parsedUrl.pathname === '/tournaments/get-events') {
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({
+            events: [
+              {
+                id: 5555,
+                homeTeam: { id: 102102, name: 'Club Africain' },
+                awayTeam: { id: 8153, name: 'Esperance Tunis' },
+                status: { type: 'inprogress', code: 31, description: '2nd half' },
+                homeScore: { current: 1, period1: 1 },
+                awayScore: { current: 1, period1: 0 },
+                startTimestamp: 1730000000
+              }
+            ]
+          })
+        };
+      }
+      return { ok: false, status: 404, statusText: 'Not Found' };
     };
 
-    const result = await sofaFetch('/unique-tournament/984/season/65427/events/last/0');
-    assert.ok(result.events.length === 1, 'Event returned through gateway');
+    const res = await fetchTournamentEvents({
+      tournamentId: 984,
+      seasonId: 65427,
+      course: 'last',
+      page: 0,
+      fetcher: mockFetchWithFallback
+    });
 
-    const parsedUrl = new URL(calledUrl);
-    assert.strictEqual(parsedUrl.hostname, 'sofascore-api6.p.rapidapi.com', 'Correct RapidAPI host');
-    assert.strictEqual(parsedUrl.pathname, '/nativePassThrough', 'Routes via /nativePassThrough');
-    assert.strictEqual(parsedUrl.searchParams.get('path'), '/unique-tournament/984/season/65427/events/last/0', 'Native path without /api/v1 prefix passed as query param');
-    assert.strictEqual(calledOptions.headers['X-RapidAPI-Host'], 'sofascore-api6.p.rapidapi.com', 'X-RapidAPI-Host header attached');
-    assert.strictEqual(calledOptions.headers['X-RapidAPI-Key'], 'test-rapidapi-key-12345', 'X-RapidAPI-Key header attached');
-    console.log('✓ sofascore-api6 nativePassThrough routing and headers verified successfully');
+    const events = extractEventsFromResponse(res);
+    assert.strictEqual(events.length, 1, '1 event extracted from /tournaments/get-events response');
+    assert.strictEqual(events[0].id, 5555);
+
+    // Verify 2 calls were made (first returned 404, fallback succeeded)
+    assert.strictEqual(calledUrls.length, 2, 'Fallback should try candidate 1 then candidate 2');
+
+    const url1 = new URL(calledUrls[0]);
+    assert.strictEqual(url1.hostname, 'sofascore-api6.p.rapidapi.com');
+    assert.strictEqual(url1.pathname, '/tournaments/get-last-matches');
+    assert.strictEqual(url1.searchParams.get('tournamentId'), '984');
+    assert.strictEqual(url1.searchParams.get('seasonId'), '65427');
+
+    const url2 = new URL(calledUrls[1]);
+    assert.strictEqual(url2.hostname, 'sofascore-api6.p.rapidapi.com');
+    assert.strictEqual(url2.pathname, '/tournaments/get-events');
+    assert.strictEqual(url2.searchParams.get('tournamentId'), '984');
+    assert.strictEqual(url2.searchParams.get('seasonId'), '65427');
+
+    // Verify RapidAPI headers
+    assert.strictEqual(calledOptionsList[1].headers['X-RapidAPI-Host'], 'sofascore-api6.p.rapidapi.com');
+    assert.strictEqual(calledOptionsList[1].headers['X-RapidAPI-Key'], 'test-rapidapi-key-12345');
+
+    // Verify working endpoint was cached
+    assert.strictEqual(getCachedWorkingEndpoint(), '/tournaments/get-events');
+
+    // Subsequent call should use cached working endpoint immediately without 404
+    calledUrls.length = 0;
+    const res2 = await fetchTournamentEvents({
+      tournamentId: 984,
+      seasonId: 65427,
+      course: 'last',
+      page: 0,
+      fetcher: mockFetchWithFallback
+    });
+    assert.strictEqual(calledUrls.length, 1, 'Subsequent call uses cached endpoint directly (1 call)');
+    assert.strictEqual(new URL(calledUrls[0]).pathname, '/tournaments/get-events');
+
+    console.log('✓ Dedicated RapidAPI tournament endpoints with candidate fallback passed successfully');
   } finally {
     global.fetch = originalFetch;
     if (originalApiKey !== undefined) process.env.RAPIDAPI_KEY = originalApiKey;

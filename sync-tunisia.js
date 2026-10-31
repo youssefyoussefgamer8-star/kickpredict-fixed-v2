@@ -40,32 +40,49 @@ if (proxyUrl) {
 }
 
 /**
- * Universal SofaScore Fetcher:
- * 1. If RAPIDAPI_KEY is configured -> Routes through RapidAPI (sofascore-api6.p.rapidapi.com),
- *    using the /nativePassThrough endpoint to forward native SofaScore paths directly.
- * 2. If SOFA_PROXY is configured -> Routes through the specified proxy via undici.ProxyAgent.
- * 3. Otherwise -> Calls direct SofaScore API with randomized anti-block headers.
+ * Candidate official endpoints on RapidAPI for tournament match fixtures/results
+ */
+function getRapidApiCandidateEndpoints(course = 'last') {
+  if (process.env.RAPIDAPI_SOFA_ENDPOINT) {
+    return [process.env.RAPIDAPI_SOFA_ENDPOINT.trim()];
+  }
+  if (course === 'last') {
+    return [
+      '/tournaments/get-last-matches',
+      '/tournaments/get-events',
+      '/tournaments/get-schedule',
+      '/tournaments/get-matches',
+      '/tournaments/events',
+      `/unique-tournament/${TOURNAMENT_ID}/season/events/last`
+    ];
+  } else {
+    return [
+      '/tournaments/get-next-matches',
+      '/tournaments/get-schedule',
+      '/tournaments/get-events',
+      '/tournaments/get-matches',
+      '/tournaments/events',
+      `/unique-tournament/${TOURNAMENT_ID}/season/events/next`
+    ];
+  }
+}
+
+let cachedWorkingEndpoint = null;
+
+/**
+ * Universal SofaScore Fetcher for raw endpoints (direct or proxy route)
  */
 async function sofaFetch(path, params = {}) {
   const isRapidApi = Boolean(process.env.RAPIDAPI_KEY && process.env.RAPIDAPI_KEY.trim());
 
   let url;
   let headers;
-  let nativePathWithSlash = '';
-  let nativePathNoSlash = '';
+
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  const directPath = cleanPath.replace(/^\/?(api\/)?v1\/?/, '');
 
   if (isRapidApi) {
-    // Strip leading /api/v1 or /v1 prefix because sofascore-api6's nativePassThrough
-    // already routes to SofaScore's api/v1 internally.
-    const stripped = path.replace(/^\/?(api\/)?v1\/?/, '');
-    nativePathWithSlash = `/${stripped.replace(/^\/+/, '')}`;
-    nativePathNoSlash = stripped.replace(/^\/+/, '');
-
-    url = new URL(`https://${RAPIDAPI_HOST}/nativePassThrough`);
-    url.searchParams.set('path', nativePathWithSlash);
-    url.searchParams.set('url', nativePathWithSlash);
-    url.searchParams.set('endpoint', nativePathWithSlash);
-
+    url = new URL(`https://${RAPIDAPI_HOST}/${directPath}`);
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
     }
@@ -75,10 +92,7 @@ async function sofaFetch(path, params = {}) {
       'Accept': 'application/json'
     };
   } else {
-    // Direct or proxy route
-    const cleanPath = path.startsWith('/') ? path : `/${path}`;
-    const directPath = cleanPath.replace(/^\/?(api\/)?v1\/?/, '');
-    url = new URL(`${DIRECT_BASE_URL}/${directPath.replace(/^\/+/, '')}`);
+    url = new URL(`${DIRECT_BASE_URL}/${directPath}`);
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
     }
@@ -105,33 +119,6 @@ async function sofaFetch(path, params = {}) {
 
   const res = await fetch(url.toString(), options);
   if (!res.ok) {
-    // Fallback: If /nativePassThrough returned 404, retry without leading slash or on direct path
-    if (res.status === 404 && isRapidApi && url.pathname.includes('nativePassThrough')) {
-      // 1. Try nativePassThrough without leading slash (path=unique-tournament/...)
-      try {
-        const retryUrl = new URL(url.toString());
-        retryUrl.searchParams.set('path', nativePathNoSlash);
-        retryUrl.searchParams.set('url', nativePathNoSlash);
-        retryUrl.searchParams.set('endpoint', nativePathNoSlash);
-        const retryRes = await fetch(retryUrl.toString(), options);
-        if (retryRes.ok) {
-          return retryRes.json();
-        }
-      } catch (_) {}
-
-      // 2. Try direct route on host
-      try {
-        const fallbackUrl = new URL(`https://${RAPIDAPI_HOST}${nativePathWithSlash}`);
-        for (const [k, v] of Object.entries(params)) {
-          if (v !== undefined && v !== null) fallbackUrl.searchParams.set(k, String(v));
-        }
-        const fallbackRes = await fetch(fallbackUrl.toString(), options);
-        if (fallbackRes.ok) {
-          return fallbackRes.json();
-        }
-      } catch (_) {}
-    }
-
     if (res.status === 403 && !isRapidApi) {
       throw new Error(
         `SofaScore HTTP 403 (Cloudflare block). Add RAPIDAPI_KEY to .env/Render or set SOFA_PROXY to bypass.`
@@ -140,6 +127,90 @@ async function sofaFetch(path, params = {}) {
     throw new Error(`SofaScore HTTP ${res.status} (${res.statusText}) on ${url.toString()}`);
   }
   return res.json();
+}
+
+/**
+ * Fetches tournament events via official dedicated RapidAPI endpoints with candidate fallback,
+ * or via direct SofaScore route when not using RapidAPI.
+ */
+async function fetchTournamentEvents({
+  tournamentId = TOURNAMENT_ID,
+  seasonId = 65427,
+  course = 'last',
+  page = 0,
+  fetcher = fetch
+} = {}) {
+  const isRapidApi = Boolean(process.env.RAPIDAPI_KEY && process.env.RAPIDAPI_KEY.trim());
+
+  if (!isRapidApi) {
+    const directPath = `/unique-tournament/${tournamentId}/season/${seasonId}/events/${course}/${page}`;
+    return sofaFetch(directPath);
+  }
+
+  const candidateList = getRapidApiCandidateEndpoints(course);
+  const candidates = cachedWorkingEndpoint
+    ? [cachedWorkingEndpoint, ...candidateList.filter((e) => e !== cachedWorkingEndpoint)]
+    : candidateList;
+
+  let lastError = null;
+
+  for (const endpoint of candidates) {
+    const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+    const url = new URL(`https://${RAPIDAPI_HOST}${cleanEndpoint}`);
+    url.searchParams.set('tournamentId', String(tournamentId));
+    url.searchParams.set('tournament_id', String(tournamentId));
+    url.searchParams.set('seasonId', String(seasonId));
+    url.searchParams.set('season_id', String(seasonId));
+    url.searchParams.set('course_events', course);
+    url.searchParams.set('page', String(page));
+
+    const options = {
+      headers: {
+        'X-RapidAPI-Key': process.env.RAPIDAPI_KEY.trim(),
+        'X-RapidAPI-Host': RAPIDAPI_HOST,
+        'Accept': 'application/json'
+      },
+      signal: AbortSignal.timeout(25000)
+    };
+
+    try {
+      const res = await fetcher(url.toString(), options);
+      if (res.status === 404) {
+        lastError = new Error(`RapidAPI endpoint ${cleanEndpoint} returned 404`);
+        continue;
+      }
+      if (!res.ok) {
+        throw new Error(`RapidAPI HTTP ${res.status} (${res.statusText}) on ${cleanEndpoint}`);
+      }
+      const data = await res.json();
+      cachedWorkingEndpoint = endpoint;
+      return data;
+    } catch (err) {
+      lastError = err;
+      if (err.message && err.message.includes('404')) {
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  throw lastError || new Error(`All candidate endpoints for tournament ${tournamentId} returned 404 on ${RAPIDAPI_HOST}`);
+}
+
+/**
+ * Robustly extracts match/event array from any RapidAPI vendor structure
+ */
+function extractEventsFromResponse(data) {
+  if (!data) return [];
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data.events)) return data.events;
+  if (Array.isArray(data.matches)) return data.matches;
+  if (Array.isArray(data.data?.events)) return data.data.events;
+  if (Array.isArray(data.data?.matches)) return data.data.matches;
+  if (Array.isArray(data.data)) return data.data;
+  if (Array.isArray(data.results)) return data.results;
+  if (Array.isArray(data.response)) return data.response;
+  return [];
 }
 
 /**
@@ -203,11 +274,15 @@ function parseSofaScoreScore(homeScoreObj, awayScoreObj, status) {
     return { home: null, away: null, homeHt: null, awayHt: null };
   }
 
-  const home = homeScoreObj?.current ?? homeScoreObj?.display ?? homeScoreObj?.normaltime ?? null;
-  const away = awayScoreObj?.current ?? awayScoreObj?.display ?? awayScoreObj?.normaltime ?? null;
+  const home = typeof homeScoreObj === 'number'
+    ? homeScoreObj
+    : (homeScoreObj?.current ?? homeScoreObj?.display ?? homeScoreObj?.normaltime ?? null);
+  const away = typeof awayScoreObj === 'number'
+    ? awayScoreObj
+    : (awayScoreObj?.current ?? awayScoreObj?.display ?? awayScoreObj?.normaltime ?? null);
 
-  const homeHt = homeScoreObj?.period1 ?? null;
-  const awayHt = awayScoreObj?.period1 ?? null;
+  const homeHt = typeof homeScoreObj === 'object' ? (homeScoreObj?.period1 ?? null) : null;
+  const awayHt = typeof awayScoreObj === 'object' ? (awayScoreObj?.period1 ?? null) : null;
 
   return {
     home: home !== null && !isNaN(Number(home)) ? Number(home) : null,
@@ -221,11 +296,11 @@ function parseSofaScoreScore(homeScoreObj, awayScoreObj, status) {
  * Extracts round information from a SofaScore event
  */
 function roundInfoFromSofaScore(event) {
-  const round = event.roundInfo?.round;
+  const round = event.roundInfo?.round ?? event.round;
   if (Number.isInteger(round) && round > 0) {
     return { stage: 'REGULAR_SEASON', matchday: round, key: `MD:${round}`, label: `Matchday ${round}` };
   }
-  const name = String(event.roundInfo?.name || 'Regular Season').trim();
+  const name = String(event.roundInfo?.name || event.round_name || 'Regular Season').trim();
   const cleanKey = name.replace(/[^A-Za-z0-9]+/g, '_').toUpperCase() || 'MD_1';
   return { stage: 'REGULAR_SEASON', matchday: null, key: cleanKey, label: name };
 }
@@ -296,23 +371,24 @@ async function syncTunisianLeague(pool) {
       console.warn(`[Tunisia SofaScore] Seasons query skipped or failed (${seasonErr.message}). Using preset season ID: ${seasonId}.`);
     }
 
-    // Fetch finished fixtures and upcoming scheduled fixtures via native SofaScore paths
+    // Fetch finished fixtures and upcoming scheduled fixtures via dedicated official tournament endpoints
     const [lastRes, nextRes] = await Promise.allSettled([
-      sofaFetch(`/unique-tournament/${TOURNAMENT_ID}/season/${seasonId}/events/last/0`),
-      sofaFetch(`/unique-tournament/${TOURNAMENT_ID}/season/${seasonId}/events/next/0`)
+      fetchTournamentEvents({ tournamentId: TOURNAMENT_ID, seasonId, course: 'last', page: 0 }),
+      fetchTournamentEvents({ tournamentId: TOURNAMENT_ID, seasonId, course: 'next', page: 0 })
     ]);
 
     const finishedEvents = lastRes.status === 'fulfilled'
-      ? (Array.isArray(lastRes.value?.events) ? lastRes.value.events : (Array.isArray(lastRes.value?.data?.events) ? lastRes.value.data.events : []))
+      ? extractEventsFromResponse(lastRes.value)
       : [];
     const upcomingEvents = nextRes.status === 'fulfilled'
-      ? (Array.isArray(nextRes.value?.events) ? nextRes.value.events : (Array.isArray(nextRes.value?.data?.events) ? nextRes.value.data.events : []))
+      ? extractEventsFromResponse(nextRes.value)
       : [];
 
-    // Deduplicate events by event.id
+    // Deduplicate events by event ID
     const eventsMap = new Map();
     for (const ev of [...finishedEvents, ...upcomingEvents]) {
-      if (ev && ev.id) eventsMap.set(ev.id, ev);
+      const extId = ev?.id ?? ev?.external_id ?? ev?.matchId;
+      if (extId !== undefined && extId !== null) eventsMap.set(String(extId), ev);
     }
     const allEvents = Array.from(eventsMap.values());
 
@@ -326,11 +402,11 @@ async function syncTunisianLeague(pool) {
     for (const ev of allEvents) {
       const st = mapSofaScoreStatus(ev.status);
       if (st !== 'FINISHED') continue;
-      const scores = parseSofaScoreScore(ev.homeScore, ev.awayScore, st);
+      const scores = parseSofaScoreScore(ev.homeScore ?? ev.home_score, ev.awayScore ?? ev.away_score, st);
       if (scores.home === null || scores.away === null) continue;
       finishedForModel.push({
-        homeId: Number(ev.homeTeam?.id),
-        awayId: Number(ev.awayTeam?.id),
+        homeId: Number(ev.homeTeam?.id ?? ev.home_team?.id),
+        awayId: Number(ev.awayTeam?.id ?? ev.away_team?.id),
         homeGoals: scores.home,
         awayGoals: scores.away
       });
@@ -340,17 +416,18 @@ async function syncTunisianLeague(pool) {
 
     let updatedCount = 0;
     for (const ev of allEvents) {
-      const extId = Number(ev.id);
-      const homeTeam = ev.homeTeam;
-      const awayTeam = ev.awayTeam;
-      if (!Number.isSafeInteger(extId) || !homeTeam?.name || !awayTeam?.name || !ev.startTimestamp) continue;
+      const extId = Number(ev.id ?? ev.external_id ?? ev.matchId);
+      const homeTeam = ev.homeTeam || ev.home_team;
+      const awayTeam = ev.awayTeam || ev.away_team;
+      const startTimestamp = ev.startTimestamp ?? ev.start_timestamp ?? (ev.date ? Math.floor(new Date(ev.date).getTime() / 1000) : null);
+      if (!Number.isSafeInteger(extId) || !homeTeam?.name || !awayTeam?.name || !startTimestamp) continue;
 
       const round = roundInfoFromSofaScore(ev);
       const status = mapSofaScoreStatus(ev.status);
-      const scores = parseSofaScoreScore(ev.homeScore, ev.awayScore, status);
+      const scores = parseSofaScoreScore(ev.homeScore ?? ev.home_score, ev.awayScore ?? ev.away_score, status);
       const { lambdaHome, lambdaAway } = matchLambdas(Number(homeTeam.id), Number(awayTeam.id), model);
       const markets = buildMatchMarketsPoints(lambdaHome, lambdaAway);
-      const kickoff = new Date(ev.startTimestamp * 1000).toISOString();
+      const kickoff = new Date(startTimestamp * 1000).toISOString();
 
       const homeCrest = homeTeam.id ? `https://img.sofascore.com/api/v1/team/${homeTeam.id}/image` : null;
       const awayCrest = awayTeam.id ? `https://img.sofascore.com/api/v1/team/${awayTeam.id}/image` : null;
@@ -490,11 +567,22 @@ async function smartPollTunisia(
     );
     const roundEndpoint = hasLiveOrStarted ? 'last' : 'next';
 
-    const data = await fetcher(`/unique-tournament/${TOURNAMENT_ID}/season/${seasonId}/events/${roundEndpoint}/0`);
+    let data;
+    if (typeof fetcher === 'function' && fetcher !== sofaFetch && fetcher !== fetch) {
+      data = await fetcher(`/tournaments/get-${roundEndpoint}-matches`, {
+        tournamentId: TOURNAMENT_ID,
+        seasonId
+      });
+    } else {
+      data = await fetchTournamentEvents({
+        tournamentId: TOURNAMENT_ID,
+        seasonId,
+        course: roundEndpoint,
+        page: 0
+      });
+    }
 
-    const events = Array.isArray(data?.events)
-      ? data.events
-      : (Array.isArray(data?.data?.events) ? data.data.events : []);
+    const events = extractEventsFromResponse(data);
 
     if (!events.length) {
       console.log(`[Tunisia SofaScore Smart Polling] 0 events returned from batch endpoint (${roundEndpoint}).`);
@@ -504,9 +592,10 @@ async function smartPollTunisia(
     // Index all events from the batch response by external_id (as string & number for robust matching)
     const eventsMap = new Map();
     for (const ev of events) {
-      if (ev && ev.id !== undefined && ev.id !== null) {
-        eventsMap.set(String(ev.id), ev);
-        eventsMap.set(Number(ev.id), ev);
+      const id = ev?.id ?? ev?.external_id ?? ev?.matchId;
+      if (id !== undefined && id !== null) {
+        eventsMap.set(String(id), ev);
+        eventsMap.set(Number(id), ev);
       }
     }
 
@@ -519,7 +608,7 @@ async function smartPollTunisia(
         if (!ev) continue;
 
         const newStatus = mapSofaScoreStatus(ev.status);
-        const scores = parseSofaScoreScore(ev.homeScore, ev.awayScore, newStatus);
+        const scores = parseSofaScoreScore(ev.homeScore ?? ev.home_score, ev.awayScore ?? ev.away_score, newStatus);
 
         const statusChanged = match.status !== newStatus;
         const scoreChanged =
@@ -613,9 +702,14 @@ module.exports = {
   parseSofaScoreScore,
   roundInfoFromSofaScore,
   sofaFetch,
+  fetchTournamentEvents,
+  extractEventsFromResponse,
+  getRapidApiCandidateEndpoints,
   getActiveSeasonId,
   setCachedSeasonId: (id) => { cachedSeasonId = id; },
   getCachedSeasonId: () => cachedSeasonId,
+  setCachedWorkingEndpoint: (ep) => { cachedWorkingEndpoint = ep; },
+  getCachedWorkingEndpoint: () => cachedWorkingEndpoint,
   TOURNAMENT_ID
 };
 
