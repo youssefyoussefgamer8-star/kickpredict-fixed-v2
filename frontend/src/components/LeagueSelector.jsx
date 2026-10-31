@@ -1,6 +1,17 @@
-import React from 'react';
+import React, { useState } from 'react';
 
-const LEAGUE_ICONS = {
+const LEAGUE_LOGOS = {
+  PL: 'https://images.fotmob.com/image_resources/logo/leaguelogo/47.png',
+  PD: 'https://images.fotmob.com/image_resources/logo/leaguelogo/87.png',
+  BL1: 'https://images.fotmob.com/image_resources/logo/leaguelogo/54.png',
+  SA: 'https://images.fotmob.com/image_resources/logo/leaguelogo/55.png',
+  FL1: 'https://images.fotmob.com/image_resources/logo/leaguelogo/53.png',
+  CL: 'https://images.fotmob.com/image_resources/logo/leaguelogo/42.png',
+  TU1: 'https://images.fotmob.com/image_resources/logo/leaguelogo/240.png'
+};
+
+const LEAGUE_FALLBACK_ICONS = {
+  LIVE: '🔴',
   ALL: '✦',
   PL: '◈',
   PD: '◉',
@@ -19,119 +30,196 @@ export default function LeagueSelector({
   allMatches = []
 }) {
   const isAr = lang === 'ar';
-  const liveCount = allMatches.filter((m) => m.status === 'IN_PLAY' || m.status === 'PAUSED').length;
+  const [isExpanded, setIsExpanded] = useState(true);
+
+  const liveMatches = allMatches.filter((m) => m.status === 'IN_PLAY' || m.status === 'PAUSED');
+  const liveCount = liveMatches.length;
+
+  const currentSelectionName = (() => {
+    if (competition === 'LIVE') return isAr ? 'مباشر 🔴' : 'LIVE 🔴';
+    if (competition === 'ALL') return isAr ? 'كل الدوريات' : 'ALL LEAGUES';
+    const found = competitions.find((c) => c.code === competition);
+    return found ? found.name.toUpperCase() : competition;
+  })();
 
   return (
-    <div className="w-full mb-6">
-      <div className="flex items-center justify-between mb-3 text-xs font-black uppercase tracking-wider text-gray-400">
-        <div className="flex items-center gap-2">
-          <span className="text-[#53FC18]">☷</span>
-          <span>{isAr ? 'اختر البطولة أو الدوري' : 'SELECT LEAGUE / COMPETITION'}</span>
+    <div className="w-full mb-8 bg-black rounded-2xl border border-[#222222] shadow-2xl overflow-hidden">
+      {/* Top Bar with Section Title & Current Status */}
+      <div className="flex items-center justify-between px-5 py-4 border-b border-[#1c1c1c] bg-[#0a0a0a]">
+        <div className="flex items-center gap-3">
+          <span className="text-[#F0C72F] font-black text-base">☰</span>
+          <span className="text-xs sm:text-sm font-black uppercase tracking-wider text-white">
+            {isAr ? 'اختيار البطولة' : 'SELECT LEAGUE'}
+          </span>
+          {competition && (
+            <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-[#181818] text-[#F0C72F] border border-[#333]">
+              {currentSelectionName}
+            </span>
+          )}
         </div>
-        <span className="text-[11px] font-semibold text-gray-500">
-          {allMatches.length} {isAr ? 'مباراة متاحة' : 'matches available'}
-        </span>
+        <div className="flex items-center gap-2">
+          {liveCount > 0 && (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-950/80 border border-red-500/50 text-red-400 text-[11px] font-black tracking-wider animate-pulse">
+              <span className="h-2 w-2 rounded-full bg-red-500" />
+              {liveCount} {isAr ? 'مباشر' : 'LIVE'}
+            </span>
+          )}
+          <span className="text-[11px] font-semibold text-gray-400">
+            {allMatches.length} {isAr ? 'مباراة' : 'matches'}
+          </span>
+        </div>
       </div>
 
-      {/* Horizontal Scrollable Bar with smooth scrollbar-hidden style */}
-      <div className="flex items-center gap-2.5 overflow-x-auto pb-2 pt-0.5 scroll-smooth no-scrollbar">
-        {/* Live Matches Pill */}
+      {/* Vertical List of Leagues (matches image_62fd15.png design) */}
+      <div
+        className={`p-3 space-y-1.5 transition-all duration-300 ${
+          isExpanded ? 'max-h-[620px] overflow-y-auto' : 'max-h-[290px] overflow-hidden'
+        }`}
+      >
+        {/* 1. LIVE OPTION (At the very top of the list with pulsing red indicator) */}
         <button
           type="button"
           onClick={() => changeCompetition('LIVE')}
-          className={`group inline-flex shrink-0 items-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all duration-150 active:scale-95 ${
+          className={`w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all duration-150 active:scale-[0.99] ${
             competition === 'LIVE'
-              ? 'bg-red-600 text-white shadow-lg shadow-red-600/30 scale-[1.02] border border-red-500'
-              : 'bg-[#1a1a1a] text-gray-300 border border-[#2a2a2a] hover:bg-[#252525] hover:text-white hover:border-red-500/50'
+              ? 'bg-[#1c0808] border-2 border-red-500 shadow-lg shadow-red-950/50'
+              : 'bg-[#0d0d0d] hover:bg-[#180a0a] border border-[#261010] hover:border-red-900/60'
           }`}
         >
-          <span className="relative flex h-2.5 w-2.5 items-center justify-center">
-            {liveCount > 0 && (
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
-            )}
+          <div className="flex items-center gap-3.5" dir="ltr">
+            <span className="relative flex h-4 w-4 items-center justify-center shrink-0">
+              {liveCount > 0 && (
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75" />
+              )}
+              <span
+                className={`relative inline-flex rounded-full h-3 w-3 ${
+                  liveCount > 0 ? 'bg-red-500 animate-pulse' : 'bg-red-500'
+                }`}
+              />
+            </span>
+            <div className="flex items-center gap-2">
+              <span className="font-black uppercase tracking-wider text-sm sm:text-base text-red-400">
+                {isAr ? 'مباشر 🔴' : 'LIVE 🔴'}
+              </span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-300 font-mono font-bold tracking-tight">
+                {isAr ? 'جارية الآن' : 'IN-PLAY'}
+              </span>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
             <span
-              className={`relative inline-flex rounded-full h-2 w-2 ${
-                competition === 'LIVE' ? 'bg-white' : 'bg-red-500 animate-pulse'
-              }`}
-            />
-          </span>
-          <span className={competition === 'LIVE' ? 'text-white font-black' : 'text-red-400 group-hover:text-red-300'}>
-            {isAr ? 'مباشر 🔴' : 'Live 🔴'}
-          </span>
-          {liveCount > 0 && (
-            <span
-              className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-bold ${
-                competition === 'LIVE'
-                  ? 'bg-black/30 text-white'
-                  : 'bg-red-500/20 text-red-400 border border-red-500/30'
+              className={`text-xs font-mono font-black px-2.5 py-0.5 rounded-full ${
+                liveCount > 0 ? 'bg-red-600 text-white shadow-sm shadow-red-600/40' : 'bg-white/10 text-gray-400'
               }`}
             >
               {liveCount}
             </span>
-          )}
+            {competition === 'LIVE' && <span className="text-red-400 font-black text-sm">✓</span>}
+          </div>
         </button>
 
-        {/* All Leagues Pill */}
+        {/* 2. ALL LEAGUES OPTION */}
         <button
           type="button"
           onClick={() => changeCompetition('ALL')}
-          className={`group inline-flex shrink-0 items-center gap-2.5 px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all duration-150 active:scale-95 ${
+          className={`w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all duration-150 active:scale-[0.99] ${
             competition === 'ALL'
-              ? 'bg-[#53FC18] text-black shadow-lg shadow-[#53FC18]/25 scale-[1.02]'
-              : 'bg-[#1a1a1a] text-gray-300 border border-[#2a2a2a] hover:bg-[#252525] hover:text-white hover:border-gray-600'
+              ? 'bg-[#141414] border-2 border-[#53FC18] shadow-lg shadow-[#53FC18]/10'
+              : 'bg-[#0d0d0d] hover:bg-[#171717] border border-[#1f1f1f] hover:border-gray-700'
           }`}
         >
-          <span className={`text-sm ${competition === 'ALL' ? 'text-black' : 'text-[#53FC18]'}`}>
-            ✦
-          </span>
-          <span>{isAr ? 'كل الدوريات' : 'All Leagues'}</span>
-          <span
-            className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-bold ${
-              competition === 'ALL'
-                ? 'bg-black/20 text-black'
-                : 'bg-white/10 text-gray-400 group-hover:text-white'
-            }`}
-          >
-            {allMatches.length}
-          </span>
+          <div className="flex items-center gap-3.5" dir="ltr">
+            <div className="w-7 h-7 rounded-lg bg-[#1a1a1a] flex items-center justify-center text-[#53FC18] font-black text-sm shrink-0 border border-[#2a2a2a]">
+              ✦
+            </div>
+            <span className="font-black uppercase tracking-wider text-sm sm:text-base text-white">
+              {isAr ? 'كل الدوريات' : 'ALL LEAGUES'}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-mono font-bold px-2 py-0.5 rounded-md bg-white/10 text-gray-300">
+              {allMatches.length}
+            </span>
+            {competition === 'ALL' && <span className="text-[#53FC18] font-black text-sm">✓</span>}
+          </div>
         </button>
 
-        {/* Individual League Pills */}
+        {/* 3. INDIVIDUAL LEAGUES (Exact visual style from image_62fd15.png: logo on left, white bold uppercase on right) */}
         {competitions.map((c) => {
           const isSelected = competition === c.code;
           const matchCount = allMatches.filter((m) => m.competition_code === c.code).length;
-          const icon = LEAGUE_ICONS[c.code] || '⚽';
+          const logoUrl = LEAGUE_LOGOS[c.code];
+          const fallbackIcon = LEAGUE_FALLBACK_ICONS[c.code] || '⚽';
+          const displayName = (c.name || c.code).toUpperCase();
 
           return (
             <button
               key={c.code}
               type="button"
               onClick={() => changeCompetition(c.code)}
-              className={`group inline-flex shrink-0 items-center gap-2.5 px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all duration-150 active:scale-95 ${
+              className={`w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all duration-150 active:scale-[0.99] ${
                 isSelected
-                  ? 'bg-[#53FC18] text-black shadow-lg shadow-[#53FC18]/25 scale-[1.02]'
-                  : 'bg-[#1a1a1a] text-gray-300 border border-[#2a2a2a] hover:bg-[#252525] hover:text-white hover:border-gray-600'
+                  ? 'bg-[#181818] border-2 border-[#F0C72F] shadow-lg shadow-[#F0C72F]/10'
+                  : 'bg-[#0d0d0d] hover:bg-[#171717] border border-[#1f1f1f] hover:border-gray-700'
               }`}
             >
-              <span className={`text-sm ${isSelected ? 'text-black' : 'text-[#53FC18]'}`}>
-                {icon}
-              </span>
-              <span>{c.name}</span>
-              {matchCount > 0 && (
+              <div className="flex items-center gap-3.5" dir="ltr">
+                {logoUrl ? (
+                  <img
+                    src={logoUrl}
+                    alt={c.name}
+                    className="w-7 h-7 sm:w-8 sm:h-8 object-contain shrink-0 filter drop-shadow-sm"
+                    loading="lazy"
+                    onError={(e) => {
+                      e.currentTarget.style.display = 'none';
+                      if (e.currentTarget.nextElementSibling) {
+                        e.currentTarget.nextElementSibling.style.display = 'flex';
+                      }
+                    }}
+                  />
+                ) : null}
                 <span
-                  className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-bold ${
-                    isSelected
-                      ? 'bg-black/20 text-black'
-                      : 'bg-white/10 text-gray-400 group-hover:text-white'
-                  }`}
+                  className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-[#1a1a1a] items-center justify-center text-sm shrink-0 border border-[#2a2a2a]"
+                  style={{ display: logoUrl ? 'none' : 'flex' }}
                 >
-                  {matchCount}
+                  {fallbackIcon}
                 </span>
-              )}
+                <span className="font-black uppercase tracking-wider text-sm sm:text-base text-white text-left">
+                  {displayName}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                {matchCount > 0 && (
+                  <span className="text-xs font-mono font-bold px-2 py-0.5 rounded-md bg-white/10 text-gray-300">
+                    {matchCount}
+                  </span>
+                )}
+                {isSelected && <span className="text-[#F0C72F] font-black text-sm">✓</span>}
+              </div>
             </button>
           );
         })}
       </div>
+
+      {/* Yellow / Gold Chevron Toggle at the bottom (matching image_62fd15.png) */}
+      <button
+        type="button"
+        onClick={() => setIsExpanded((prev) => !prev)}
+        className="w-full flex items-center justify-center py-2.5 bg-[#0a0a0a] hover:bg-[#141414] border-t border-[#1a1a1a] transition-colors cursor-pointer group"
+        title={isExpanded ? (isAr ? 'طي القائمة' : 'Collapse') : (isAr ? 'عرض كل البطولات' : 'Expand all leagues')}
+      >
+        <svg
+          className={`w-6 h-6 text-[#F0C72F] group-hover:scale-110 transition-transform duration-200 ${
+            isExpanded ? 'rotate-180' : 'rotate-0'
+          }`}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="3.5"
+          viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
     </div>
   );
 }
