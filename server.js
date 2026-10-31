@@ -294,7 +294,7 @@ app.get(
 );
 
 // ---------------------------------------------------------------------------
-// 3b. Live Match Clock & Real-Time Score Helper (ESPN Public Scoreboard API)
+// 3b. Live Match Clock (Minutes + Seconds + Stoppage Time) & Score Helper
 // ---------------------------------------------------------------------------
 const ESPN_LEAGUE_SLUGS = {
   PL: 'eng.1',
@@ -307,7 +307,7 @@ const ESPN_LEAGUE_SLUGS = {
 };
 
 const espnLiveCache = new Map();
-const ESPN_CACHE_TTL_MS = 20 * 1000; // 20 seconds cache
+const ESPN_CACHE_TTL_MS = 15 * 1000; // 15 seconds cache
 
 function normalizeTeamTokens(name) {
   if (!name) return [];
@@ -349,31 +349,81 @@ function teamsSimilarity(dbName, espnCompetitor) {
   return best;
 }
 
-function formatEspnClock(statusObj) {
+function extractClockDetails(statusObj, utcDate) {
   if (!statusObj) return null;
   const typeName = statusObj.type?.name || '';
   const shortDetail = statusObj.type?.shortDetail || '';
   if (typeName === 'STATUS_HALFTIME' || shortDetail === 'HT') {
-    return 'HT';
+    return { live_clock: 'HT', live_seconds: null, live_stoppage_base: null };
   }
-  const rawClock = String(statusObj.displayClock || shortDetail || '').trim();
+  const rawClock = String(statusObj.displayClock || shortDetail || '').trim().replace(/'\+/g, '+');
   if (!rawClock || rawClock === "0'" || rawClock === '0:00') return null;
-  // Normalize e.g. "45'+3'" -> "45+3'"
-  return rawClock.replace(/'\+/g, '+');
+
+  const kickoffMs = utcDate ? new Date(utcDate).getTime() : NaN;
+  const secFromKickoff = Number.isFinite(kickoffMs)
+    ? ((Math.floor((Date.now() - kickoffMs) / 1000) % 60) + 60) % 60
+    : 0;
+  const espnClockSec = Number(statusObj.clock);
+  const secPart =
+    Number.isFinite(espnClockSec) && espnClockSec > 0 && espnClockSec % 60 !== 0
+      ? Math.floor(espnClockSec % 60)
+      : secFromKickoff;
+
+  const stoppageMatch = rawClock.match(/^(\d+)\s*'?\s*\+\s*(\d+)/);
+  if (stoppageMatch) {
+    const baseMin = parseInt(stoppageMatch[1], 10);
+    const addedMin = parseInt(stoppageMatch[2], 10);
+    return {
+      live_clock: `${baseMin}+${addedMin}'`,
+      live_seconds: addedMin * 60 + secPart,
+      live_stoppage_base: baseMin
+    };
+  }
+
+  const normalMatch = rawClock.match(/^(\d+)/);
+  if (normalMatch) {
+    const min = parseInt(normalMatch[1], 10);
+    return {
+      live_clock: `${min}'`,
+      live_seconds: min * 60 + secPart,
+      live_stoppage_base: null
+    };
+  }
+
+  return { live_clock: rawClock, live_seconds: null, live_stoppage_base: null };
 }
 
-function computeFallbackLiveClock(utcDate, status) {
-  if (status === 'PAUSED') return 'HT';
+function computeFallbackClockDetails(utcDate, status) {
+  if (status === 'PAUSED') {
+    return { live_clock: 'HT', live_seconds: null, live_stoppage_base: null };
+  }
   if (status !== 'IN_PLAY') return null;
-  const elapsed = Math.floor((Date.now() - new Date(utcDate).getTime()) / 60000);
-  if (!Number.isFinite(elapsed) || elapsed < 0 || elapsed > 150) return null;
-  if (elapsed <= 45) return `${Math.max(1, elapsed)}'`;
-  if (elapsed <= 53) return `45+${elapsed - 45}'`;
-  if (elapsed <= 62) return 'HT';
-  const secondHalfMin = elapsed - 17;
-  if (secondHalfMin <= 90) return `${Math.max(46, secondHalfMin)}'`;
-  if (secondHalfMin <= 105) return `90+${secondHalfMin - 90}'`;
-  return "90+'";
+  const elapsedSec = Math.floor((Date.now() - new Date(utcDate).getTime()) / 1000);
+  if (!Number.isFinite(elapsedSec) || elapsedSec < 0 || elapsedSec > 150 * 60) return null;
+
+  if (elapsedSec <= 45 * 60) {
+    const min = Math.max(1, Math.floor(elapsedSec / 60));
+    return { live_clock: `${min}'`, live_seconds: elapsedSec, live_stoppage_base: null };
+  }
+  if (elapsedSec <= 53 * 60) {
+    const stopSec = elapsedSec - 45 * 60;
+    const addedMin = Math.max(1, Math.floor(stopSec / 60));
+    return { live_clock: `45+${addedMin}'`, live_seconds: stopSec, live_stoppage_base: 45 };
+  }
+  if (elapsedSec <= 62 * 60) {
+    return { live_clock: 'HT', live_seconds: null, live_stoppage_base: null };
+  }
+  const secondHalfSec = elapsedSec - 17 * 60;
+  if (secondHalfSec <= 90 * 60) {
+    const min = Math.max(46, Math.floor(secondHalfSec / 60));
+    return { live_clock: `${min}'`, live_seconds: secondHalfSec, live_stoppage_base: null };
+  }
+  if (secondHalfSec <= 105 * 60) {
+    const stopSec = secondHalfSec - 90 * 60;
+    const addedMin = Math.max(1, Math.floor(stopSec / 60));
+    return { live_clock: `90+${addedMin}'`, live_seconds: stopSec, live_stoppage_base: 90 };
+  }
+  return { live_clock: "90+'", live_seconds: null, live_stoppage_base: 90 };
 }
 
 async function fetchEspnScoreboard(competition) {
@@ -400,9 +450,9 @@ async function fetchEspnScoreboard(competition) {
 
 function enrichMatchWithLiveClock(m, espnEvents) {
   if (m.status === 'FINISHED') {
-    return { ...m, live_clock: 'FT' };
+    return { ...m, live_clock: 'FT', live_seconds: null, live_stoppage_base: null };
   }
-  let liveClock = null;
+  let clockInfo = null;
   let liveStatus = m.status;
   let liveHomeScore = m.home_score;
   let liveAwayScore = m.away_score;
@@ -431,7 +481,7 @@ function enrichMatchWithLiveClock(m, espnEvents) {
       const state = ev.status?.type?.state;
       const typeName = ev.status?.type?.name || '';
       if (state === 'in') {
-        liveClock = formatEspnClock(ev.status);
+        clockInfo = extractClockDetails(ev.status, m.utc_date);
         liveStatus = typeName === 'STATUS_HALFTIME' ? 'PAUSED' : 'IN_PLAY';
         const hScore = parseInt(homeComp?.score, 10);
         const aScore = parseInt(awayComp?.score, 10);
@@ -450,8 +500,8 @@ function enrichMatchWithLiveClock(m, espnEvents) {
     }
   }
 
-  if (!liveClock) {
-    liveClock = computeFallbackLiveClock(m.utc_date, liveStatus);
+  if (!clockInfo) {
+    clockInfo = computeFallbackClockDetails(m.utc_date, liveStatus);
   }
 
   return {
@@ -459,7 +509,9 @@ function enrichMatchWithLiveClock(m, espnEvents) {
     status: liveStatus,
     home_score: liveHomeScore,
     away_score: liveAwayScore,
-    live_clock: liveClock
+    live_clock: clockInfo ? clockInfo.live_clock : null,
+    live_seconds: clockInfo ? clockInfo.live_seconds : null,
+    live_stoppage_base: clockInfo ? clockInfo.live_stoppage_base : null
   };
 }
 

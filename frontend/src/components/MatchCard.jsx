@@ -22,6 +22,87 @@ export default function MatchCard({ match, user, lang, t, boostsLeft, onSaved, o
   const [showGrid, setShowGrid] = useState(false);
   const [saving, setSaving] = useState(false);
   const [expanded, setExpanded] = useState(Boolean(pred));
+  const [SyncedAt, setSyncedAt] = useState(() => Date.now());
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    setSyncedAt(Date.now());
+    setNowMs(Date.now());
+  }, [match.live_clock, match.live_seconds, match.status, match.home_score, match.away_score]);
+
+  useEffect(() => {
+    if (finished || !match.is_locked) return undefined;
+    const timer = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [finished, match.is_locked]);
+
+  function getLiveTimerDisplay() {
+    if (finished) return null;
+    if (match.status === 'PAUSED' || match.live_clock === 'HT') {
+      return lang === 'ar' ? 'استراحة (HT)' : 'HT';
+    }
+    const isPlaying =
+      match.status === 'IN_PLAY' ||
+      Boolean(match.live_clock) ||
+      Number.isFinite(match.live_seconds);
+    if (!isPlaying) return null;
+
+    const deltaSec = Math.max(0, Math.floor((nowMs - SyncedAt) / 1000));
+    const pad2 = (n) => String(Math.max(0, Math.floor(n))).padStart(2, '0');
+
+    // 1) If server provided live_seconds directly
+    if (Number.isFinite(match.live_seconds)) {
+      const totalSec = match.live_seconds + deltaSec;
+      if (match.live_stoppage_base) {
+        const addMin = Math.floor(totalSec / 60);
+        const addSec = totalSec % 60;
+        return `${match.live_stoppage_base}+${pad2(addMin)}:${pad2(addSec)}`;
+      }
+      const curMin = Math.floor(totalSec / 60);
+      const curSec = totalSec % 60;
+      if (curMin >= 45 && match.live_seconds < 45 * 60) {
+        return `45+${pad2(curMin - 45)}:${pad2(curSec)}`;
+      }
+      if (curMin >= 90) {
+        return `90+${pad2(curMin - 90)}:${pad2(curSec)}`;
+      }
+      return `${pad2(curMin)}:${pad2(curSec)}`;
+    }
+
+    // 2) If server sent live_clock string (e.g. "3'" or "45+2'") without live_seconds
+    const raw = String(match.live_clock || '').trim().replace(/'\+/g, '+');
+    const kickMs = match.utc_date ? new Date(match.utc_date).getTime() : NaN;
+    const baseSecOffset = Number.isFinite(kickMs)
+      ? ((Math.floor((SyncedAt - kickMs) / 1000) % 60) + 60) % 60
+      : 0;
+
+    const stopMatch = raw.match(/^(\d+)\s*'?\s*\+\s*(\d+)/);
+    if (stopMatch) {
+      const baseMin = parseInt(stopMatch[1], 10);
+      const addedMin = parseInt(stopMatch[2], 10);
+      const totalStopSec = addedMin * 60 + baseSecOffset + deltaSec;
+      return `${baseMin}+${pad2(Math.floor(totalStopSec / 60))}:${pad2(totalStopSec % 60)}`;
+    }
+
+    const normMatch = raw.match(/^(\d+)/);
+    if (normMatch) {
+      const min = parseInt(normMatch[1], 10);
+      const totalSec = min * 60 + baseSecOffset + deltaSec;
+      const curMin = Math.floor(totalSec / 60);
+      const curSec = totalSec % 60;
+      if (curMin >= 45 && min < 45) {
+        return `45+${pad2(curMin - 45)}:${pad2(curSec)}`;
+      }
+      if (curMin >= 90) {
+        return `90+${pad2(curMin - 90)}:${pad2(curSec)}`;
+      }
+      return `${pad2(curMin)}:${pad2(curSec)}`;
+    }
+
+    return null;
+  }
+
+  const liveTimerText = getLiveTimerDisplay();
 
   useEffect(() => {
     setOutcome(pred?.predicted_outcome ?? null);
@@ -146,41 +227,51 @@ export default function MatchCard({ match, user, lang, t, boostsLeft, onSaved, o
             <span className="truncate text-sm font-bold sm:text-base">{match.home_team}</span>
           </div>
 
-          {expanded ? (
-            <div className="kp-score-inputs flex items-center gap-1">
-              <input
-                type="text"
-                inputMode="numeric"
-                aria-label={`${match.home_team} score`}
-                disabled={readOnly}
-                value={home}
-                onChange={scoreChange(setHome)}
-                className="h-10 w-10 rounded-lg border border-[#242C30] bg-[#0B0E0F] text-center text-base font-extrabold outline-none focus:border-[#F0C72F] disabled:opacity-50"
-              />
-              <span className="font-bold text-gray-500">:</span>
-              <input
-                type="text"
-                inputMode="numeric"
-                aria-label={`${match.away_team} score`}
-                disabled={readOnly}
-                value={away}
-                onChange={scoreChange(setAway)}
-                className="h-10 w-10 rounded-lg border border-[#242C30] bg-[#0B0E0F] text-center text-base font-extrabold outline-none focus:border-[#F0C72F] disabled:opacity-50"
-              />
-            </div>
-          ) : (
-            <div className={`kp-vs-center ${match.is_locked ? 'has-score' : ''}`}>
-              {match.is_locked && match.home_score != null && match.away_score != null ? (
-                <>
-                  <strong>{match.home_score}</strong>
-                  <span>:</span>
-                  <strong>{match.away_score}</strong>
-                </>
-              ) : (
-                <span>VS</span>
-              )}
-            </div>
-          )}
+          <div className="flex flex-col items-center justify-center gap-1">
+            {liveTimerText && (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-0.5 font-mono text-xs font-extrabold tracking-wider text-emerald-400 shadow-sm">
+                {liveTimerText !== 'HT' && liveTimerText !== 'استراحة (HT)' && (
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
+                )}
+                {liveTimerText}
+              </span>
+            )}
+            {expanded ? (
+              <div className="kp-score-inputs flex items-center gap-1">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  aria-label={`${match.home_team} score`}
+                  disabled={readOnly}
+                  value={home}
+                  onChange={scoreChange(setHome)}
+                  className="h-10 w-10 rounded-lg border border-[#242C30] bg-[#0B0E0F] text-center text-base font-extrabold outline-none focus:border-[#F0C72F] disabled:opacity-50"
+                />
+                <span className="font-bold text-gray-500">:</span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  aria-label={`${match.away_team} score`}
+                  disabled={readOnly}
+                  value={away}
+                  onChange={scoreChange(setAway)}
+                  className="h-10 w-10 rounded-lg border border-[#242C30] bg-[#0B0E0F] text-center text-base font-extrabold outline-none focus:border-[#F0C72F] disabled:opacity-50"
+                />
+              </div>
+            ) : (
+              <div className={`kp-vs-center ${match.is_locked ? 'has-score' : ''}`}>
+                {match.is_locked && match.home_score != null && match.away_score != null ? (
+                  <>
+                    <strong>{match.home_score}</strong>
+                    <span>:</span>
+                    <strong>{match.away_score}</strong>
+                  </>
+                ) : (
+                  <span>VS</span>
+                )}
+              </div>
+            )}
+          </div>
 
           <div className="flex min-w-0 items-center justify-end gap-2">
             <span className="truncate text-sm font-bold sm:text-base">{match.away_team}</span>
@@ -199,16 +290,8 @@ export default function MatchCard({ match, user, lang, t, boostsLeft, onSaved, o
             ) : (
               <span className="kp-status-upcoming">{lang === 'ar' ? 'لم تبدأ' : 'UPCOMING'}</span>
             )}
-            {!finished && (match.live_clock || (match.status && !['TIMED', 'SCHEDULED', 'FINISHED'].includes(match.status))) && (
-              <span className="kp-status-code">
-                {match.live_clock === 'HT' || match.status === 'PAUSED'
-                  ? lang === 'ar'
-                    ? 'استراحة (HT)'
-                    : 'HT'
-                  : match.live_clock
-                  ? `⏱ ${match.live_clock}`
-                  : match.status}
-              </span>
+            {!liveTimerText && match.status && !['TIMED', 'SCHEDULED', 'FINISHED'].includes(match.status) && (
+              <span className="kp-status-code">{match.status}</span>
             )}
           </div>
           <button
