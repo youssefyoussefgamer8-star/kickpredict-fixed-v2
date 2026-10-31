@@ -3,7 +3,9 @@ const assert = require('assert');
 const {
   mapSofaScoreStatus,
   parseSofaScoreScore,
-  roundInfoFromSofaScore
+  roundInfoFromSofaScore,
+  smartPollTunisia,
+  setCachedSeasonId
 } = require('./sync-tunisia');
 const { teamRatings, matchLambdas, buildMatchMarketsPoints } = require('./pricingEngine');
 
@@ -99,4 +101,126 @@ assert.ok(markets.exact_score['1-0'] > 0, 'Exact score 1-0 points calculated');
 assert.ok(markets.extras.ou_2_5.OVER > 0, 'Extras ou_2_5 OVER points calculated');
 
 console.log('✓ Poisson pricing engine integration test passed successfully!');
-console.log('All SofaScore integration unit tests passed!');
+
+console.log('--- Testing Aggregated Smart Polling for Concurrent Matches ---');
+(async () => {
+  setCachedSeasonId(65427);
+
+  // 1. Test: Zero active matches in DB should result in 0 HTTP requests
+  let fetchCount = 0;
+  const mockFetcher = async () => {
+    fetchCount++;
+    return { events: [] };
+  };
+
+  const emptyPool = {
+    query: async () => ({ rows: [] })
+  };
+
+  await smartPollTunisia(emptyPool, { fetcher: mockFetcher });
+  assert.strictEqual(fetchCount, 0, 'Zero requests should be sent when no matches are active');
+  console.log('✓ Zero requests sent when no matches are active');
+
+  // 2. Test: 4 concurrent matches playing simultaneously -> exactly 1 aggregated request
+  fetchCount = 0;
+  let fetchedPath = null;
+  let fetchedParams = null;
+
+  const mockBatchFetcher = async (path, params) => {
+    fetchCount++;
+    fetchedPath = path;
+    fetchedParams = params;
+    return {
+      events: [
+        {
+          id: 1001,
+          status: { type: 'inprogress', code: 31, description: '2nd half' },
+          homeScore: { current: 2, period1: 1 },
+          awayScore: { current: 1, period1: 0 }
+        },
+        {
+          id: 1002,
+          status: { type: 'inprogress', code: 7, description: 'Halftime' },
+          homeScore: { current: 0, period1: 0 },
+          awayScore: { current: 0, period1: 0 }
+        },
+        {
+          id: 1003,
+          status: { type: 'finished', code: 100, description: 'Ended' },
+          homeScore: { current: 3, period1: 1 },
+          awayScore: { current: 2, period1: 1 }
+        },
+        {
+          id: 1004,
+          status: { type: 'inprogress', code: 6, description: '1st half' },
+          homeScore: { current: 1, period1: 1 },
+          awayScore: { current: 0, period1: 0 }
+        }
+      ]
+    };
+  };
+
+  const dbMatches = [
+    { id: 1, external_id: 1001, status: 'IN_PLAY', home_score: 1, away_score: 1, home_ht: 1, away_ht: 0, utc_date: new Date(Date.now() - 3600000).toISOString() },
+    { id: 2, external_id: 1002, status: 'IN_PLAY', home_score: 0, away_score: 0, home_ht: 0, away_ht: 0, utc_date: new Date(Date.now() - 2700000).toISOString() },
+    { id: 3, external_id: 1003, status: 'IN_PLAY', home_score: 2, away_score: 2, home_ht: 1, away_ht: 1, utc_date: new Date(Date.now() - 6000000).toISOString() },
+    { id: 4, external_id: 1004, status: 'SCHEDULED', home_score: null, away_score: null, home_ht: null, away_ht: null, utc_date: new Date(Date.now() - 600000).toISOString() }
+  ];
+
+  const updatedDbRows = [];
+  const testPool = {
+    query: async (sql, params) => {
+      if (sql.includes('SELECT id, external_id')) {
+        return { rows: dbMatches };
+      }
+      if (sql.includes('UPDATE matches')) {
+        updatedDbRows.push({
+          status: params[0],
+          home_score: params[1],
+          away_score: params[2],
+          home_ht: params[3],
+          away_ht: params[4],
+          id: params[5]
+        });
+        return { rowCount: 1 };
+      }
+      return { rows: [] };
+    }
+  };
+
+  let reconciledRows = null;
+  let settled = false;
+
+  await smartPollTunisia(testPool, {
+    settleFinishedMatches: async () => { settled = true; },
+    reconcileScoreCorrections: async (rows) => { reconciledRows = rows; },
+    fetcher: mockBatchFetcher
+  });
+
+  // Verify exactly 1 single batch call was made regardless of 4 concurrent matches
+  assert.strictEqual(fetchCount, 1, 'Exactly 1 batch request must be sent for all concurrent matches');
+  console.log('✓ Exactly 1 aggregated API request sent for 4 concurrent matches');
+
+  // Verify all 4 matches were updated
+  assert.strictEqual(updatedDbRows.length, 4, 'All 4 matches should have been updated from the single batch response');
+  assert.strictEqual(updatedDbRows[0].status, 'IN_PLAY');
+  assert.strictEqual(updatedDbRows[0].home_score, 2);
+  assert.strictEqual(updatedDbRows[0].away_score, 1);
+
+  assert.strictEqual(updatedDbRows[1].status, 'PAUSED'); // Halftime
+
+  assert.strictEqual(updatedDbRows[2].status, 'FINISHED'); // Ended
+  assert.strictEqual(updatedDbRows[2].home_score, 3);
+  assert.strictEqual(updatedDbRows[2].away_score, 2);
+
+  assert.strictEqual(updatedDbRows[3].status, 'IN_PLAY');
+  assert.strictEqual(updatedDbRows[3].home_score, 1);
+  assert.strictEqual(updatedDbRows[3].away_score, 0);
+
+  // Verify reconciliation and settlement were triggered
+  assert.ok(settled, 'settleFinishedMatches was invoked');
+  assert.strictEqual(reconciledRows.length, 4, 'reconcileScoreCorrections was called with 4 updated rows');
+  console.log('✓ All 4 concurrent matches updated, reconciled, and settled accurately from 1 request');
+
+  console.log('All SofaScore integration and batch smart-polling unit tests passed!');
+})();
