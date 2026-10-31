@@ -51,16 +51,20 @@ async function sofaFetch(path, params = {}) {
 
   let url;
   let headers;
+  let nativePathWithSlash = '';
+  let nativePathNoSlash = '';
 
   if (isRapidApi) {
-    // Route via RapidAPI sofascore-api6 gateway using nativePassThrough
-    const cleanPath = path.startsWith('/') ? path : `/${path}`;
-    const nativePath = cleanPath.startsWith('/api/v1') ? cleanPath : `/api/v1${cleanPath}`;
+    // Strip leading /api/v1 or /v1 prefix because sofascore-api6's nativePassThrough
+    // already routes to SofaScore's api/v1 internally.
+    const stripped = path.replace(/^\/?(api\/)?v1\/?/, '');
+    nativePathWithSlash = `/${stripped.replace(/^\/+/, '')}`;
+    nativePathNoSlash = stripped.replace(/^\/+/, '');
 
     url = new URL(`https://${RAPIDAPI_HOST}/nativePassThrough`);
-    url.searchParams.set('path', nativePath);
-    url.searchParams.set('url', nativePath);
-    url.searchParams.set('endpoint', nativePath);
+    url.searchParams.set('path', nativePathWithSlash);
+    url.searchParams.set('url', nativePathWithSlash);
+    url.searchParams.set('endpoint', nativePathWithSlash);
 
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
@@ -73,7 +77,8 @@ async function sofaFetch(path, params = {}) {
   } else {
     // Direct or proxy route
     const cleanPath = path.startsWith('/') ? path : `/${path}`;
-    url = new URL(`${DIRECT_BASE_URL}${cleanPath}`);
+    const directPath = cleanPath.replace(/^\/?(api\/)?v1\/?/, '');
+    url = new URL(`${DIRECT_BASE_URL}/${directPath.replace(/^\/+/, '')}`);
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
     }
@@ -100,17 +105,31 @@ async function sofaFetch(path, params = {}) {
 
   const res = await fetch(url.toString(), options);
   if (!res.ok) {
-    // Fallback: If /nativePassThrough returned 404, attempt direct native path on host
+    // Fallback: If /nativePassThrough returned 404, retry without leading slash or on direct path
     if (res.status === 404 && isRapidApi && url.pathname.includes('nativePassThrough')) {
-      const cleanPath = path.startsWith('/') ? path : `/${path}`;
-      const fallbackUrl = new URL(`https://${RAPIDAPI_HOST}${cleanPath.startsWith('/api/v1') ? cleanPath : `/api/v1${cleanPath}`}`);
-      for (const [k, v] of Object.entries(params)) {
-        if (v !== undefined && v !== null) fallbackUrl.searchParams.set(k, String(v));
-      }
-      const fallbackRes = await fetch(fallbackUrl.toString(), options);
-      if (fallbackRes.ok) {
-        return fallbackRes.json();
-      }
+      // 1. Try nativePassThrough without leading slash (path=unique-tournament/...)
+      try {
+        const retryUrl = new URL(url.toString());
+        retryUrl.searchParams.set('path', nativePathNoSlash);
+        retryUrl.searchParams.set('url', nativePathNoSlash);
+        retryUrl.searchParams.set('endpoint', nativePathNoSlash);
+        const retryRes = await fetch(retryUrl.toString(), options);
+        if (retryRes.ok) {
+          return retryRes.json();
+        }
+      } catch (_) {}
+
+      // 2. Try direct route on host
+      try {
+        const fallbackUrl = new URL(`https://${RAPIDAPI_HOST}${nativePathWithSlash}`);
+        for (const [k, v] of Object.entries(params)) {
+          if (v !== undefined && v !== null) fallbackUrl.searchParams.set(k, String(v));
+        }
+        const fallbackRes = await fetch(fallbackUrl.toString(), options);
+        if (fallbackRes.ok) {
+          return fallbackRes.json();
+        }
+      } catch (_) {}
     }
 
     if (res.status === 403 && !isRapidApi) {

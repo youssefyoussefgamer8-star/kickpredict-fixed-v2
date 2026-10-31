@@ -249,7 +249,7 @@ console.log('--- Testing Aggregated Smart Polling for Concurrent Matches ---');
     const parsedUrl = new URL(calledUrl);
     assert.strictEqual(parsedUrl.hostname, 'sofascore-api6.p.rapidapi.com', 'Correct RapidAPI host');
     assert.strictEqual(parsedUrl.pathname, '/nativePassThrough', 'Routes via /nativePassThrough');
-    assert.strictEqual(parsedUrl.searchParams.get('path'), '/api/v1/unique-tournament/984/season/65427/events/last/0', 'Native path passed as query param');
+    assert.strictEqual(parsedUrl.searchParams.get('path'), '/unique-tournament/984/season/65427/events/last/0', 'Native path without /api/v1 prefix passed as query param');
     assert.strictEqual(calledOptions.headers['X-RapidAPI-Host'], 'sofascore-api6.p.rapidapi.com', 'X-RapidAPI-Host header attached');
     assert.strictEqual(calledOptions.headers['X-RapidAPI-Key'], 'test-rapidapi-key-12345', 'X-RapidAPI-Key header attached');
     console.log('✓ sofascore-api6 nativePassThrough routing and headers verified successfully');
