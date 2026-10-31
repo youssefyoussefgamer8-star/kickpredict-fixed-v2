@@ -30,8 +30,7 @@ const REQUIRED_ENV = [
   'KICK_CLIENT_SECRET',
   'KICK_REDIRECT_URI',
   'FOOTBALL_DATA_API_KEY',
-  'FRONTEND_URL',
-  'MAX_BOOSTS_PER_MATCHDAY'
+  'FRONTEND_URL'
 ];
 
 for (const key of REQUIRED_ENV) {
@@ -47,11 +46,8 @@ if (process.env.JWT_SECRET.length < 32) {
   process.exit(1);
 }
 
-const MAX_BOOSTS = Number(process.env.MAX_BOOSTS_PER_MATCHDAY);
-if (!Number.isInteger(MAX_BOOSTS) || MAX_BOOSTS < 0) {
-  console.error('[FATAL] MAX_BOOSTS_PER_MATCHDAY must be a non-negative integer.');
-  process.exit(1);
-}
+// Boost feature disabled globally
+const MAX_BOOSTS = 0;
 
 // Competitions available on the football-data.org FREE tier
 const COMPETITION_NAMES = {
@@ -896,7 +892,7 @@ app.post(
   writeLimiter,
   asyncHandler(async (req, res) => {
     const { matchId, predictedOutcome, predictedHome, predictedAway, isBoosted, extras } = req.body || {};
-    const wantBoost = Boolean(isBoosted);
+    const wantBoost = false; // Boost disabled
 
     if (!/^\d+$/.test(String(matchId || ''))) {
       return res.status(400).json({ error: 'Invalid match.' });
@@ -1366,7 +1362,7 @@ async function settleFinishedMatches() {
           return { ...pick, status: won ? 'WON' : 'LOST', won, points_earned: earned };
         });
 
-        const finalPoints = base * (pred.is_boosted ? 2 : 1);
+        const finalPoints = base;
 
         await client.query(
           `UPDATE predictions

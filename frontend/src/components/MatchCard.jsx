@@ -4,7 +4,7 @@ import { EXTRAS, CATEGORIES, OPTION_LABELS } from '../constants/gameData';
 import Chip from './Chip';
 import ScoreGridModal from './ScoreGridModal';
 
-export default function MatchCard({ match, user, lang, t, boostsLeft, onSaved, onError }) {
+export default function MatchCard({ match, user, lang, t, onSaved, onError }) {
   const pred = match.prediction;
   const markets = match.markets_points;
   const settled = match.settled_outcomes;
@@ -14,7 +14,6 @@ export default function MatchCard({ match, user, lang, t, boostsLeft, onSaved, o
   const [outcome, setOutcome] = useState(pred?.predicted_outcome ?? null);
   const [home, setHome] = useState(pred?.predicted_home ?? '');
   const [away, setAway] = useState(pred?.predicted_away ?? '');
-  const [boost, setBoost] = useState(pred?.is_boosted ?? false);
   const [picks, setPicks] = useState(
     Array.isArray(pred?.extras_picks) ? pred.extras_picks.map((p) => ({ market: p.market, selection: p.selection })) : []
   );
@@ -32,7 +31,6 @@ export default function MatchCard({ match, user, lang, t, boostsLeft, onSaved, o
     setOutcome(pred?.predicted_outcome ?? null);
     setHome(pred?.predicted_home ?? '');
     setAway(pred?.predicted_away ?? '');
-    setBoost(pred?.is_boosted ?? false);
     setPicks(
       Array.isArray(pred?.extras_picks) ? pred.extras_picks.map((p) => ({ market: p.market, selection: p.selection })) : []
     );
@@ -146,14 +144,13 @@ export default function MatchCard({ match, user, lang, t, boostsLeft, onSaved, o
   const extrasPointsSum = picks.reduce((sum, p) => sum + extraPts(p.market, p.selection), 0);
 
   const potential =
-    ((outcome ? outcomePts(outcome) : 0) +
-      (scoreValid ? exactPts(Number(home), Number(away)) : 0) +
-      extrasPointsSum) *
-    (boost ? 2 : 1);
+    (outcome ? outcomePts(outcome) : 0) +
+    (scoreValid ? exactPts(Number(home), Number(away)) : 0) +
+    extrasPointsSum;
 
   const hasAnyPick = Boolean(outcome) || scoreValid || picks.length > 0;
 
-  // Compute min-max ranges for display badges like in screenshot
+  // Compute min-max ranges for display badges
   const outcomeValues = ['HOME', 'DRAW', 'AWAY'].map((k) => outcomePts(k)).filter((v) => v > 0);
   const minOutcomePts = outcomeValues.length ? Math.min(...outcomeValues) : 10;
   const maxOutcomePts = outcomeValues.length ? Math.max(...outcomeValues) : 15;
@@ -196,11 +193,11 @@ export default function MatchCard({ match, user, lang, t, boostsLeft, onSaved, o
           predictedOutcome: outcome,
           predictedHome: home === '' ? null : Number(home),
           predictedAway: away === '' ? null : Number(away),
-          isBoosted: boost,
+          isBoosted: false,
           extras: picks
         })
       });
-      onSaved(data.prediction, data.boostsUsed);
+      onSaved(data.prediction, 0);
     } catch (err) {
       onError(err.message);
     } finally {
@@ -208,7 +205,28 @@ export default function MatchCard({ match, user, lang, t, boostsLeft, onSaved, o
     }
   }
 
-  const optionLabel = (extra, opt) => extra.labels?.[lang]?.[opt] ?? OPTION_LABELS[lang]?.[opt] ?? opt;
+  // Always replace generic HOME / AWAY labels with actual club names (match.home_team / match.away_team)
+  function formatTeamOptionLabel(extra, opt) {
+    const key = String(opt || '').toUpperCase();
+    if (key === 'HOME') return match.home_team;
+    if (key === 'AWAY') return match.away_team;
+    if (key === 'HOME_ONLY') {
+      return lang === 'ar' ? `${match.home_team} فقط` : `${match.home_team} ONLY`;
+    }
+    if (key === 'AWAY_ONLY') {
+      return lang === 'ar' ? `${match.away_team} فقط` : `${match.away_team} ONLY`;
+    }
+
+    const baseLabel = String(extra?.labels?.[lang]?.[opt] ?? OPTION_LABELS[lang]?.[opt] ?? opt);
+    return baseLabel
+      .replace(/\bHOME ONLY\b/gi, lang === 'ar' ? `${match.home_team} فقط` : `${match.home_team} ONLY`)
+      .replace(/\bAWAY ONLY\b/gi, lang === 'ar' ? `${match.away_team} فقط` : `${match.away_team} ONLY`)
+      .replace(/\bHOME\b/gi, match.home_team)
+      .replace(/\bAWAY\b/gi, match.away_team)
+      .replace(/صاحب الأرض|المضيف/g, match.home_team)
+      .replace(/الضيف/g, match.away_team);
+  }
+
   const outcomeOptions = [
     { key: 'HOME', label: match.home_team, crest: match.home_crest },
     { key: 'DRAW', label: t.draw || (lang === 'ar' ? 'تعادل' : 'DRAW'), crest: null },
@@ -363,7 +381,7 @@ export default function MatchCard({ match, user, lang, t, boostsLeft, onSaved, o
         </div>
       </div>
 
-      {/* Full-Screen Match Center Modal (like screenshot) */}
+      {/* Full-Screen Match Center Modal */}
       {expanded && (
         <div
           className="fixed inset-0 z-50 overflow-y-auto bg-black/85 backdrop-blur-md p-3 sm:p-6"
@@ -595,14 +613,14 @@ export default function MatchCard({ match, user, lang, t, boostsLeft, onSaved, o
                   <div className="mb-3 flex items-center justify-between text-xs font-black uppercase tracking-wider">
                     <span className="text-gray-300">{t.whoWins || 'WHO WINS?'}</span>
                     <span className="inline-flex items-center gap-1 font-mono text-xs text-gray-300">
-                      <span className=" inline-block h-3.5 w-3.5 rounded-full bg-[#F0C72F] text-center text-[10px] font-black leading-3.5 text-black">
+                      <span className="inline-block h-3.5 w-3.5 rounded-full bg-[#F0C72F] text-center text-[10px] font-black leading-3.5 text-black">
                         ◷
                       </span>
                       {minOutcomePts}-{maxOutcomePts}
                     </span>
                   </div>
 
-                  <div className="flex flex-col gap-2.5 my-auto">
+                  <div className="my-auto flex flex-col gap-2.5">
                     {outcomeOptions.map((o) => {
                       const selected = outcome === o.key;
                       return (
@@ -710,7 +728,7 @@ export default function MatchCard({ match, user, lang, t, boostsLeft, onSaved, o
                                     : 'border-[#242C30] bg-[#0B0E0F] text-gray-300 hover:border-gray-500'
                                 } disabled:cursor-default`}
                               >
-                                <span>{optionLabel(extra, opt)}</span>
+                                <span>{formatTeamOptionLabel(extra, opt)}</span>
                                 <span className={isPicked ? 'text-black/80' : 'text-[#F0C72F]'}>
                                   +{extraPts(extra.key, opt)}
                                 </span>
@@ -739,7 +757,7 @@ export default function MatchCard({ match, user, lang, t, boostsLeft, onSaved, o
                     <div className="flex flex-wrap gap-1.5">
                       {pred.predicted_outcome && (
                         <Chip ok={pred.predicted_outcome === settled.outcome_1x2}>
-                          {t.whoWins} {OPTION_LABELS[lang][pred.predicted_outcome]}
+                          {t.whoWins} {formatTeamOptionLabel(null, pred.predicted_outcome)}
                         </Chip>
                       )}
                       {pred.predicted_home != null && (
@@ -751,7 +769,7 @@ export default function MatchCard({ match, user, lang, t, boostsLeft, onSaved, o
                         const meta = EXTRAS.find((x) => x.key === p.market);
                         return (
                           <Chip key={p.market} ok={p.status === 'WON'} voided={p.status === 'VOID'} voidText={t.void}>
-                            {meta ? meta[lang] : p.market}: {meta ? optionLabel(meta, p.selection) : p.selection}
+                            {meta ? meta[lang] : p.market}: {formatTeamOptionLabel(meta, p.selection)}
                           </Chip>
                         );
                       })}
@@ -759,22 +777,9 @@ export default function MatchCard({ match, user, lang, t, boostsLeft, onSaved, o
                   </div>
                 )}
 
-                {/* Submit & Boost Bar */}
+                {/* Submit Bar (Boost completely removed) */}
                 {!finished && user && !match.is_locked && (
-                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-[#242C30] pt-4 text-xs">
-                    <button
-                      type="button"
-                      onClick={() => setBoost(!boost)}
-                      disabled={!boost && boostsLeft <= 0 && !pred?.is_boosted}
-                      className={`rounded-xl border px-4 py-2.5 font-black uppercase tracking-wider transition disabled:opacity-40 ${
-                        boost
-                          ? 'border-[#F0C72F] bg-[#F0C72F]/20 text-[#F0C72F]'
-                          : 'border-[#242C30] bg-[#14191B] text-gray-300 hover:text-white'
-                      }`}
-                    >
-                      ⚡ {t.boost}
-                    </button>
-
+                  <div className="mt-4 flex items-center justify-end border-t border-[#242C30] pt-4 text-xs">
                     <button
                       type="submit"
                       disabled={saving || !hasAnyPick}
