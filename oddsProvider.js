@@ -8,7 +8,7 @@ const { buildMatchMarketsPointsFromOdds } = require('./pricingEngine');
 const API_BASE = 'https://v3.football.api-sports.io';
 
 // football-data.org competition code -> API-Football league id
-const AF_LEAGUE_IDS = { PL: 39, PD: 140, BL1: 78, SA: 135, FL1: 61, CL: 2 };
+const AF_LEAGUE_IDS = { PL: 39, PD: 140, BL1: 78, SA: 135, FL1: 61, CL: 2, TUN: 202, TU1: 202 };
 
 const BOOKMAKER_ID = parseInt(process.env.ODDS_BOOKMAKER_ID || '8', 10); // 8 = Bet365
 const WINDOW_DAYS = parseInt(process.env.ODDS_WINDOW_DAYS || '7', 10);   // only price matches kicking off within N days

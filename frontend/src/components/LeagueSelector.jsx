@@ -7,7 +7,8 @@ const LEAGUE_LOGOS = {
   SA: 'https://images.fotmob.com/image_resources/logo/leaguelogo/55.png',
   FL1: 'https://images.fotmob.com/image_resources/logo/leaguelogo/53.png',
   CL: 'https://images.fotmob.com/image_resources/logo/leaguelogo/42.png',
-  TU1: 'https://images.fotmob.com/image_resources/logo/leaguelogo/240.png'
+  TUN: 'https://images.fotmob.com/image_resources/logo/leaguelogo/544.png',
+  TU1: 'https://images.fotmob.com/image_resources/logo/leaguelogo/544.png'
 };
 
 const LEAGUE_FALLBACK_ICONS = {
@@ -19,7 +20,13 @@ const LEAGUE_FALLBACK_ICONS = {
   SA: '●',
   FL1: '◎',
   CL: '★',
+  TUN: '🇹🇳',
   TU1: '🇹🇳'
+};
+
+const LEAGUE_NAME_OVERRIDES = {
+  TUN: 'LIGUE PROFESSIONNELLE 1',
+  TU1: 'LIGUE PROFESSIONNELLE 1'
 };
 
 export default function LeagueSelector({
@@ -38,6 +45,7 @@ export default function LeagueSelector({
   const currentSelectionName = (() => {
     if (competition === 'LIVE') return isAr ? 'مباشر 🔴' : 'LIVE 🔴';
     if (competition === 'ALL') return isAr ? 'كل الدوريات' : 'ALL LEAGUES';
+    if (LEAGUE_NAME_OVERRIDES[competition]) return LEAGUE_NAME_OVERRIDES[competition];
     const found = competitions.find((c) => c.code === competition);
     return found ? found.name.toUpperCase() : competition;
   })();
@@ -150,7 +158,7 @@ export default function LeagueSelector({
           const matchCount = allMatches.filter((m) => m.competition_code === c.code).length;
           const logoUrl = LEAGUE_LOGOS[c.code];
           const fallbackIcon = LEAGUE_FALLBACK_ICONS[c.code] || '⚽';
-          const displayName = (c.name || c.code).toUpperCase();
+          const displayName = LEAGUE_NAME_OVERRIDES[c.code] || (c.name || c.code).toUpperCase();
 
           return (
             <button

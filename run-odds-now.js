@@ -5,7 +5,7 @@ require('dotenv').config();
 const { Pool } = require('pg');
 const odds = require('./oddsProvider');
 
-const competitions = (process.env.COMPETITION_CODES || process.env.COMPETITION_CODE || 'PL,PD,BL1,SA,FL1,CL')
+const competitions = (process.env.COMPETITION_CODES || process.env.COMPETITION_CODE || 'PL,PD,BL1,SA,FL1,CL,TUN')
   .split(',').map(c => c.trim().toUpperCase()).filter(Boolean);
 
 (async () => {

@@ -72,7 +72,8 @@ const COMPETITION_NAMES = {
   SA: 'Serie A',
   FL1: 'Ligue 1',
   CL: 'Champions League',
-  TU1: 'Tunisian Ligue Professionnelle 1',
+  TUN: 'Ligue Professionnelle 1',
+  TU1: 'Ligue Professionnelle 1',
   DEMO: 'Demo League'
 };
 
@@ -83,7 +84,9 @@ const FOTMOB_COMPETITION_IDS = {
   BL1: 54,
   SA: 55,
   FL1: 53,
-  CL: 42
+  CL: 42,
+  TUN: 544,
+  TU1: 544
 };
 const FOTMOB_ID_TO_CODE = {
   47: 'PL',
@@ -91,13 +94,15 @@ const FOTMOB_ID_TO_CODE = {
   54: 'BL1',
   55: 'SA',
   53: 'FL1',
-  42: 'CL'
+  42: 'CL',
+  544: 'TUN',
+  240: 'TUN'
 };
-const FOTMOB_COMPETITIONS = new Set(['PL', 'PD', 'BL1', 'SA', 'FL1', 'CL']);
+const FOTMOB_COMPETITIONS = new Set(['PL', 'PD', 'BL1', 'SA', 'FL1', 'CL', 'TUN', 'TU1']);
 const FOOTBALL_DATA_COMPETITIONS = FOTMOB_COMPETITIONS;
 
 const COMPETITIONS = [...new Set(
-  (process.env.COMPETITION_CODES || 'PL,PD,BL1,SA,FL1,CL')
+  (process.env.COMPETITION_CODES ? (process.env.COMPETITION_CODES.includes('TUN') || process.env.COMPETITION_CODES.includes('TU1') ? process.env.COMPETITION_CODES : `${process.env.COMPETITION_CODES},TUN`) : 'PL,PD,BL1,SA,FL1,CL,TUN')
     .split(',')
     .map((s) => s.trim().toUpperCase())
     .filter(Boolean)
@@ -333,6 +338,7 @@ const ESPN_LEAGUE_SLUGS = {
   SA: 'ita.1',
   FL1: 'fra.1',
   CL: 'uefa.champions',
+  TUN: 'tun.1',
   TU1: 'tun.1'
 };
 
@@ -1162,7 +1168,14 @@ const FOTMOB_TEAM_ALIASES = {
   8563: 'PAE AEK',
   9728: 'Shaktar',
   7787: 'Slavia Praha',
-  6019: 'Sl. Bratislava'
+  6019: 'Sl. Bratislava',
+  // TUN
+  8153: 'Espérance Tunis',
+  6366: 'Étoile du Sahel',
+  102102: 'Club Africain',
+  102106: 'CS Sfaxien',
+  102109: 'US Monastir',
+  102116: 'Stade Tunisien'
 };
 
 function normalizeTeamName(team) {

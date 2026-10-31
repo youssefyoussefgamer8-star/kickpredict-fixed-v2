@@ -31,7 +31,7 @@ export default function Sidebar({
             className={`kp-side-link ${competition === c.code ? 'is-selected' : ''}`}
           >
             <span className={`kp-side-symbol league-${String(c.code).toLowerCase()}`}>
-              {c.code === 'CL' ? '★' : c.code === 'PL' ? '◈' : c.code === 'PD' ? '◉' : c.code === 'SA' ? '●' : c.code === 'BL1' ? '◆' : '◎'}
+              {c.code === 'CL' ? '★' : c.code === 'PL' ? '◈' : c.code === 'PD' ? '◉' : c.code === 'SA' ? '●' : c.code === 'BL1' ? '◆' : (c.code === 'TUN' || c.code === 'TU1') ? '🇹🇳' : '◎'}
             </span>
             <span className="kp-side-link-text">{c.name}</span>
             {competition === c.code && <span className="kp-side-active-dot" />}
