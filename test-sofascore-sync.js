@@ -5,7 +5,8 @@ const {
   parseSofaScoreScore,
   roundInfoFromSofaScore,
   smartPollTunisia,
-  setCachedSeasonId
+  setCachedSeasonId,
+  sofaFetch
 } = require('./sync-tunisia');
 const { teamRatings, matchLambdas, buildMatchMarketsPoints } = require('./pricingEngine');
 
@@ -221,6 +222,44 @@ console.log('--- Testing Aggregated Smart Polling for Concurrent Matches ---');
   assert.ok(settled, 'settleFinishedMatches was invoked');
   assert.strictEqual(reconciledRows.length, 4, 'reconcileScoreCorrections was called with 4 updated rows');
   console.log('✓ All 4 concurrent matches updated, reconciled, and settled accurately from 1 request');
+
+  console.log('--- Testing RapidAPI sofascore-api6 Gateway nativePassThrough Routing ---');
+  const originalFetch = global.fetch;
+  const originalApiKey = process.env.RAPIDAPI_KEY;
+  const originalHost = process.env.RAPIDAPI_SOFA_HOST;
+
+  try {
+    process.env.RAPIDAPI_KEY = 'test-rapidapi-key-12345';
+    delete process.env.RAPIDAPI_SOFA_HOST;
+
+    let calledUrl = null;
+    let calledOptions = null;
+    global.fetch = async (url, options) => {
+      calledUrl = url;
+      calledOptions = options;
+      return {
+        ok: true,
+        json: async () => ({ events: [{ id: 9999 }] })
+      };
+    };
+
+    const result = await sofaFetch('/unique-tournament/984/season/65427/events/last/0');
+    assert.ok(result.events.length === 1, 'Event returned through gateway');
+
+    const parsedUrl = new URL(calledUrl);
+    assert.strictEqual(parsedUrl.hostname, 'sofascore-api6.p.rapidapi.com', 'Correct RapidAPI host');
+    assert.strictEqual(parsedUrl.pathname, '/nativePassThrough', 'Routes via /nativePassThrough');
+    assert.strictEqual(parsedUrl.searchParams.get('path'), '/api/v1/unique-tournament/984/season/65427/events/last/0', 'Native path passed as query param');
+    assert.strictEqual(calledOptions.headers['X-RapidAPI-Host'], 'sofascore-api6.p.rapidapi.com', 'X-RapidAPI-Host header attached');
+    assert.strictEqual(calledOptions.headers['X-RapidAPI-Key'], 'test-rapidapi-key-12345', 'X-RapidAPI-Key header attached');
+    console.log('✓ sofascore-api6 nativePassThrough routing and headers verified successfully');
+  } finally {
+    global.fetch = originalFetch;
+    if (originalApiKey !== undefined) process.env.RAPIDAPI_KEY = originalApiKey;
+    else delete process.env.RAPIDAPI_KEY;
+    if (originalHost !== undefined) process.env.RAPIDAPI_SOFA_HOST = originalHost;
+    else delete process.env.RAPIDAPI_SOFA_HOST;
+  }
 
   console.log('All SofaScore integration and batch smart-polling unit tests passed!');
 })();
