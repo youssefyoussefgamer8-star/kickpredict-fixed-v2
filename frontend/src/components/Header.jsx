@@ -12,7 +12,7 @@ export default function Header({
 }) {
   return (
     <header className="kp-header">
-      <div className="kp-header-inner">
+      <div className="kp-header-inner w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <button className="kp-brand" onClick={() => setTab('matches')} aria-label="KickPredict home">
           <span className="kp-brand-mark">K</span>
           <span className="kp-brand-copy">

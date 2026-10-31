@@ -292,91 +292,126 @@ export default function MatchCard({ match, user, lang, t, onSaved, onError }) {
 
   return (
     <>
-      {/* Compact Match Card in Fixture List */}
-      <div className="kp-match-card">
-        {/* Top line */}
-        <div className="kp-fixture-meta flex items-center justify-between text-xs text-gray-400">
-          <span className="kp-fixture-time">
-            <span className="kp-clock-dot">◷</span>{' '}
-            {new Date(match.utc_date).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
-          </span>
-          <div className="flex items-center gap-2">
+      {/* Compact Match Card in Responsive Grid */}
+      <div className="kp-match-card group relative flex flex-col justify-between rounded-xl border border-[#2a2a2a] bg-[#1a1a1a] p-4 sm:p-5 shadow-lg transition-all duration-200 hover:-translate-y-1 hover:border-[#53FC18]/50 hover:shadow-2xl hover:shadow-black/60">
+        {/* Top Meta Line: Time & Status Badges */}
+        <div className="flex items-center justify-between text-[11px] font-semibold text-gray-400 pb-2 border-b border-white/5">
+          <div className="flex items-center gap-1.5 truncate">
+            <span className="text-[#53FC18]">◷</span>
+            <span className="truncate">
+              {new Date(match.utc_date).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5 shrink-0">
             {pred && (
-              <span className="rounded bg-[#F0C72F]/15 px-2 py-0.5 font-bold text-[#F0C72F]">{t.locked}</span>
+              <span className="inline-flex items-center gap-1 rounded-md bg-[#53FC18]/15 border border-[#53FC18]/30 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-[#53FC18]">
+                <span>✓</span> {t.locked}
+              </span>
             )}
             {statusBadge}
           </div>
         </div>
 
-        {/* Teams + Live Timer Above Score */}
-        <div className="kp-fixture-teams grid grid-cols-[1fr_auto_1fr] items-center gap-3">
-          <div className="flex min-w-0 items-center gap-2">
-            {match.home_crest && <img src={match.home_crest} alt="" className="h-8 w-8 object-contain" />}
-            <span className="truncate text-sm font-bold sm:text-base">{match.home_team}</span>
+        {/* Teams Matchup: Opposing Home vs Away with Centered Scoreboard */}
+        <div className="my-3 grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+          {/* Home Team */}
+          <div className="flex flex-col items-center text-center gap-1.5 min-w-0">
+            <div className="flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center rounded-2xl bg-[#111315] p-2 border border-white/5 shadow-inner transition-transform group-hover:scale-105">
+              {match.home_crest ? (
+                <img src={match.home_crest} alt="" className="h-full w-full object-contain drop-shadow" />
+              ) : (
+                <span className="text-xs font-black text-gray-400">{String(match.home_team || 'H').slice(0, 2).toUpperCase()}</span>
+              )}
+            </div>
+            <span className="w-full truncate text-xs sm:text-sm font-extrabold text-white" title={match.home_team}>
+              {match.home_team}
+            </span>
           </div>
 
-          <div className="flex flex-col items-center justify-center gap-1">
+          {/* Center Scoreboard / Live Clock / VS */}
+          <div className="flex flex-col items-center justify-center gap-1 px-1">
             {liveTimerText && (
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-0.5 font-mono text-xs font-extrabold tracking-wider text-emerald-400 shadow-sm">
-                {liveTimerText !== 'HT' && liveTimerText !== 'استراحة (HT)' && (
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
-                )}
+              <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 font-mono text-[10px] font-black text-emerald-400 animate-pulse">
                 {liveTimerText}
               </span>
             )}
-            <div className={`kp-vs-center ${match.is_locked ? 'has-score' : ''}`}>
+
+            <div className="flex items-center justify-center min-w-[62px] h-10 rounded-xl bg-[#0f1214] border border-white/10 px-2.5 font-mono shadow-inner">
               {match.is_locked && match.home_score != null && match.away_score != null ? (
-                <>
-                  <strong>{match.home_score}</strong>
-                  <span>:</span>
-                  <strong>{match.away_score}</strong>
-                </>
+                <div className="flex items-center gap-1.5 text-lg font-black text-white">
+                  <span>{match.home_score}</span>
+                  <span className="text-[#53FC18] text-xs font-bold">:</span>
+                  <span>{match.away_score}</span>
+                </div>
               ) : scoreFilled ? (
-                <>
-                  <strong className="text-[#F0C72F]">{home}</strong>
-                  <span>:</span>
-                  <strong className="text-[#F0C72F]">{away}</strong>
-                </>
+                <div className="flex items-center gap-1 text-base font-black text-[#53FC18]">
+                  <span>{home}</span>
+                  <span className="text-gray-500 text-xs">:</span>
+                  <span>{away}</span>
+                </div>
               ) : (
-                <span>VS</span>
+                <span className="text-xs font-black tracking-widest text-gray-400">VS</span>
               )}
             </div>
+
+            {/* Potential or Earned Points Preview */}
+            {finished && pred?.points_awarded != null ? (
+              <span className="text-[10px] font-black text-[#53FC18]">
+                +{pred.points_awarded} {t.pts}
+              </span>
+            ) : !match.is_locked && potential > 0 ? (
+              <span className="text-[10px] font-bold text-gray-400">
+                {potential} {t.pts}
+              </span>
+            ) : null}
           </div>
 
-          <div className="flex min-w-0 items-center justify-end gap-2">
-            <span className="truncate text-sm font-bold sm:text-base">{match.away_team}</span>
-            {match.away_crest && <img src={match.away_crest} alt="" className="h-8 w-8 object-contain" />}
+          {/* Away Team */}
+          <div className="flex flex-col items-center text-center gap-1.5 min-w-0">
+            <div className="flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center rounded-2xl bg-[#111315] p-2 border border-white/5 shadow-inner transition-transform group-hover:scale-105">
+              {match.away_crest ? (
+                <img src={match.away_crest} alt="" className="h-full w-full object-contain drop-shadow" />
+              ) : (
+                <span className="text-xs font-black text-gray-400">{String(match.away_team || 'A').slice(0, 2).toUpperCase()}</span>
+              )}
+            </div>
+            <span className="w-full truncate text-xs sm:text-sm font-extrabold text-white" title={match.away_team}>
+              {match.away_team}
+            </span>
           </div>
         </div>
 
-        <div className="kp-fixture-action-row">
-          <div className="kp-fixture-status">
+        {/* Card Footer: Match Status & Modern Action Button */}
+        <div className="mt-3 pt-3 border-t border-white/5 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5">
             {finished ? (
-              <span className="kp-status-final">{lang === 'ar' ? 'انتهت' : 'FULL TIME'}</span>
+              <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-white/5 text-gray-400 border border-white/5">
+                {lang === 'ar' ? 'انتهت' : 'FT'}
+              </span>
             ) : match.is_locked ? (
-              <span className="kp-status-live">
-                <i /> {lang === 'ar' ? 'مباشر / بدأ' : 'LIVE / STARTED'}
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-red-500/15 text-red-400 border border-red-500/20">
+                <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-ping" />
+                {lang === 'ar' ? 'مباشر' : 'LIVE'}
               </span>
             ) : (
-              <span className="kp-status-upcoming">{lang === 'ar' ? 'لم تبدأ' : 'UPCOMING'}</span>
-            )}
-            {!liveTimerText && match.status && !['TIMED', 'SCHEDULED', 'FINISHED'].includes(match.status) && (
-              <span className="kp-status-code">{match.status}</span>
+              <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-[#53FC18]/10 text-[#53FC18] border border-[#53FC18]/20">
+                {lang === 'ar' ? 'متاح للتوقع' : 'OPEN'}
+              </span>
             )}
           </div>
+
           <button
             type="button"
-            className="kp-play-button"
             onClick={() => setExpanded(true)}
+            className={`inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all duration-150 active:scale-95 shadow-md ${
+              pred
+                ? 'bg-[#152417] text-[#53FC18] border border-[#53FC18]/40 hover:bg-[#53FC18] hover:text-black hover:shadow-[#53FC18]/20'
+                : 'bg-[#53FC18] text-black hover:bg-[#45dc12] hover:shadow-[#53FC18]/25'
+            }`}
           >
-            {pred
-              ? lang === 'ar'
-                ? 'عرض التوقع'
-                : 'View picks'
-              : lang === 'ar'
-              ? 'توقع الآن'
-              : 'Play'}{' '}
-            <span>↗</span>
+            <span>{pred ? (lang === 'ar' ? 'عرض التوقع' : 'View Picks') : (lang === 'ar' ? 'توقع الآن' : 'Play')}</span>
+            <span className="text-sm">↗</span>
           </button>
         </div>
       </div>

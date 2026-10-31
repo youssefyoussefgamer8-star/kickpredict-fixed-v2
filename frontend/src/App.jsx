@@ -5,7 +5,7 @@ import { api, API_BASE } from './utils/api';
 import { localDateKey, formatDayLabel } from './utils/dateUtils';
 import Header from './components/Header';
 import Hero from './components/Hero';
-import Sidebar from './components/Sidebar';
+import LeagueSelector from './components/LeagueSelector';
 import MatchCard from './components/MatchCard';
 import Leaderboard from './components/Leaderboard';
 import { CupPanel, RulesPanel, ProfilePanel } from './components/InfoPanels';
@@ -242,20 +242,8 @@ export default function App() {
 
       <Hero lang={lang} />
 
-      <main className="kp-layout">
-        <Sidebar
-          lang={lang}
-          competition={competition}
-          competitions={competitions}
-          changeCompetition={changeCompetition}
-          followedTeams={followedTeams}
-          selectedTeam={selectedTeam}
-          setSelectedTeam={setSelectedTeam}
-          user={user}
-          setTab={setTab}
-        />
-
-        <section className="kp-content">
+      <main className="kp-layout w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <section className="kp-content w-full">
           {loadError && (
             <div className="kp-error-banner">
               <span>{t.loadError} ({loadError})</span>
@@ -267,6 +255,51 @@ export default function App() {
 
           {tab === 'matches' && (
             <>
+              {/* Horizontal Scrollable League Selector */}
+              <LeagueSelector
+                lang={lang}
+                competition={competition}
+                competitions={competitions}
+                changeCompetition={changeCompetition}
+                allMatches={allMatches}
+              />
+
+              {/* Followed Teams Horizontal Quick-Filters */}
+              {followedTeams.length > 0 && (
+                <div className="mb-6 flex items-center gap-2 overflow-x-auto pb-1 text-xs no-scrollbar">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-gray-500 shrink-0">
+                    {lang === 'ar' ? 'فرق تتابعها:' : 'TEAMS:'}
+                  </span>
+                  {followedTeams.map((team) => {
+                    const isSelected = selectedTeam === team;
+                    return (
+                      <button
+                        key={team}
+                        type="button"
+                        onClick={() => setSelectedTeam(isSelected ? '' : team)}
+                        className={`inline-flex shrink-0 items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold transition-all duration-150 active:scale-95 ${
+                          isSelected
+                            ? 'bg-[#53FC18]/20 text-[#53FC18] border border-[#53FC18]/50 shadow-sm shadow-[#53FC18]/20'
+                            : 'bg-[#1a1a1a] text-gray-300 border border-[#2a2a2a] hover:bg-[#252525] hover:text-white'
+                        }`}
+                      >
+                        <span>{team}</span>
+                        {isSelected && <span className="text-xs">✕</span>}
+                      </button>
+                    );
+                  })}
+                  {selectedTeam && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedTeam('')}
+                      className="text-[11px] font-bold text-[#53FC18] hover:underline px-1.5"
+                    >
+                      {lang === 'ar' ? 'عرض الكل' : 'Clear'}
+                    </button>
+                  )}
+                </div>
+              )}
+
               <div className="kp-section-head">
                 <div>
                   <div className="kp-section-kicker">{lang === 'ar' ? 'مركز المباريات' : 'MATCH CENTRE'}</div>
@@ -381,7 +414,7 @@ export default function App() {
                         <span>{group.matches.length} {lang === 'ar' ? 'مواجهات' : 'fixtures'}</span>
                         <i />
                       </div>
-                      <div className="kp-match-grid">
+                      <div className="kp-match-grid grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                         {group.matches.map((m) => (
                           <MatchCard
                             key={m.id}
