@@ -10,8 +10,11 @@ const {
   fetchTournamentEvents,
   extractEventsFromResponse,
   getRapidApiCandidateEndpoints,
+  getActiveSeasonId,
   setCachedWorkingEndpoint,
-  getCachedWorkingEndpoint
+  getCachedWorkingEndpoint,
+  sanitizePath,
+  purgeLegacyTunisiaMatches
 } = require('./sync-tunisia');
 const { teamRatings, matchLambdas, buildMatchMarketsPoints } = require('./pricingEngine');
 
@@ -80,6 +83,14 @@ assert.strictEqual(r2.matchday, null);
 assert.strictEqual(r2.key, 'CHAMPIONSHIP_PLAYOFF_1');
 console.log('✓ All Round Info extraction tests passed');
 
+console.log('--- Testing URL Path Sanitization (Double-Slash Prevention) ---');
+assert.strictEqual(sanitizePath('/unique-tournament/984/seasons'), 'unique-tournament/984/seasons');
+assert.strictEqual(sanitizePath('//api/v1/unique-tournament//984/seasons//'), 'unique-tournament/984/seasons');
+assert.strictEqual(sanitizePath('/tournaments/get-last-matches'), 'tournaments/get-last-matches');
+assert.strictEqual(sanitizePath('tournaments/get-events'), 'tournaments/get-events');
+assert.strictEqual(sanitizePath('///'), '');
+console.log('✓ Path sanitization handles leading, trailing, and duplicate slashes cleanly');
+
 console.log('--- Testing Pricing Engine Integration with SofaScore Data ---');
 // Mock finished matches from SofaScore
 const mockFinishedSofaEvents = [
@@ -128,6 +139,33 @@ console.log('✓ Poisson pricing engine integration test passed successfully!');
 
 console.log('--- Testing Aggregated Smart Polling for Concurrent Matches ---');
 (async () => {
+  console.log('--- Testing Season Query Bypass ---');
+  let seasonsFetchCalled = 0;
+  const mockSeasonFetcher = async () => {
+    seasonsFetchCalled++;
+    return { seasons: [] };
+  };
+  const seasonIdResult = await getActiveSeasonId(mockSeasonFetcher);
+  assert.strictEqual(seasonIdResult, 65427, 'Uses fixed season ID 65427');
+  assert.strictEqual(seasonsFetchCalled, 0, 'Zero network calls made for seasons discovery');
+  console.log('✓ Season discovery network query completely bypassed');
+
+  console.log('--- Testing PostgreSQL Legacy Tunisia Purge ---');
+  const deletedSqls = [];
+  const mockPurgePool = {
+    query: async (sql) => {
+      deletedSqls.push(sql);
+      if (sql.includes('FROM matches')) return { rowCount: 16 };
+      if (sql.includes('FROM user_round_boosts')) return { rowCount: 2 };
+      return { rowCount: 0 };
+    }
+  };
+  const purgeResult = await purgeLegacyTunisiaMatches(mockPurgePool);
+  assert.strictEqual(purgeResult.deletedMatches, 16);
+  assert.strictEqual(purgeResult.deletedBoosts, 2);
+  assert.strictEqual(deletedSqls.length, 2);
+  console.log('✓ Legacy Tunisian matches and boosts purge verified');
+
   setCachedSeasonId(65427);
 
   // 1. Test: Zero active matches in DB should result in 0 HTTP requests
@@ -258,16 +296,16 @@ console.log('--- Testing Aggregated Smart Polling for Concurrent Matches ---');
 
     // Verify candidate lists
     const lastCandidates = getRapidApiCandidateEndpoints('last');
-    assert.ok(lastCandidates.includes('/tournaments/get-last-matches'));
-    assert.ok(lastCandidates.includes('/tournaments/get-events'));
-    assert.ok(!lastCandidates.includes('/nativePassThrough'), 'Must not contain nativePassThrough');
+    assert.ok(lastCandidates.includes('tournaments/get-last-matches'));
+    assert.ok(lastCandidates.includes('tournaments/get-events'));
+    assert.ok(!lastCandidates.includes('nativePassThrough'), 'Must not contain nativePassThrough');
 
     const nextCandidates = getRapidApiCandidateEndpoints('next');
-    assert.ok(nextCandidates.includes('/tournaments/get-next-matches'));
-    assert.ok(!nextCandidates.includes('/nativePassThrough'), 'Must not contain nativePassThrough');
+    assert.ok(nextCandidates.includes('tournaments/get-next-matches'));
+    assert.ok(!nextCandidates.includes('nativePassThrough'), 'Must not contain nativePassThrough');
 
-    // Simulate fallback: first candidate (/tournaments/get-last-matches) returns 404,
-    // second candidate (/tournaments/get-events) returns 200 with match events
+    // Simulate fallback: first candidate (tournaments/get-last-matches) returns 404,
+    // second candidate (tournaments/get-events) returns 200 with match events
     const calledUrls = [];
     const calledOptionsList = [];
 
@@ -321,6 +359,10 @@ console.log('--- Testing Aggregated Smart Polling for Concurrent Matches ---');
     // Verify 2 calls were made (first returned 404, fallback succeeded)
     assert.strictEqual(calledUrls.length, 2, 'Fallback should try candidate 1 then candidate 2');
 
+    // Verify NO double slashes in constructed URLs
+    assert.ok(!calledUrls[0].includes('//tournaments'), 'Candidate 1 URL must have single slash');
+    assert.ok(!calledUrls[1].includes('//tournaments'), 'Candidate 2 URL must have single slash');
+
     const url1 = new URL(calledUrls[0]);
     assert.strictEqual(url1.hostname, 'sofascore-api6.p.rapidapi.com');
     assert.strictEqual(url1.pathname, '/tournaments/get-last-matches');
@@ -338,7 +380,7 @@ console.log('--- Testing Aggregated Smart Polling for Concurrent Matches ---');
     assert.strictEqual(calledOptionsList[1].headers['X-RapidAPI-Key'], 'test-rapidapi-key-12345');
 
     // Verify working endpoint was cached
-    assert.strictEqual(getCachedWorkingEndpoint(), '/tournaments/get-events');
+    assert.strictEqual(getCachedWorkingEndpoint(), 'tournaments/get-events');
 
     // Subsequent call should use cached working endpoint immediately without 404
     calledUrls.length = 0;
@@ -352,7 +394,7 @@ console.log('--- Testing Aggregated Smart Polling for Concurrent Matches ---');
     assert.strictEqual(calledUrls.length, 1, 'Subsequent call uses cached endpoint directly (1 call)');
     assert.strictEqual(new URL(calledUrls[0]).pathname, '/tournaments/get-events');
 
-    console.log('✓ Dedicated RapidAPI tournament endpoints with candidate fallback passed successfully');
+    console.log('✓ Dedicated RapidAPI tournament endpoints with candidate fallback passed successfully (zero double slashes)');
   } finally {
     global.fetch = originalFetch;
     if (originalApiKey !== undefined) process.env.RAPIDAPI_KEY = originalApiKey;

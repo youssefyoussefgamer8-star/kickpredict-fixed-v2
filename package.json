@@ -17,7 +17,7 @@
   },
   "scripts": {
     "start": "node server.js",
-    "check": "node --check server.js && node --check settlementCorrection.js && node --check pricingEngine.js && node --check oddsProvider.js && node --check sync-tunisia.js && node --check scrape-tunisia.js && node --check run-odds-now.js",
+    "check": "node --check server.js && node --check settlementCorrection.js && node --check pricingEngine.js && node --check oddsProvider.js && node --check sync-tunisia.js && node --check scrape-tunisia.js && node --check run-odds-now.js && node --check purge-tunisia.js",
     "test": "node test-pricing.js && node test-odds-provider.js && node test-settlement-correction.js && node test-sofascore-sync.js"
   }
 }
