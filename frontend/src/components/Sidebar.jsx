@@ -12,6 +12,7 @@ export default function Sidebar({
   user,
   setTab
 }) {
+  const ENABLE_BOOSTS = false; // Toggle to true when boost is enabled on server
   return (
     <aside className="kp-sidebar">
       <section className="kp-side-section">
@@ -74,14 +75,17 @@ export default function Sidebar({
         </div>
       </section>
 
-      <div className="kp-side-card">
-        <div className="kp-side-card-icon">⚡</div>
-        <strong>{lang === 'ar' ? 'ضاعف فرصك' : 'Play smart.'}</strong>
-        <p>{lang === 'ar' ? 'استخدم مضاعف النقاط في الجولة المناسبة.' : 'Use your x2 boost when it matters most.'}</p>
-        <button onClick={() => (user ? setTab('matches') : (window.location.href = `${API_BASE}/auth/kick`))}>
-          {lang === 'ar' ? 'ابدأ التوقع' : 'Make your picks'} <span>→</span>
-        </button>
-      </div>
+      {/* Boost promo card hidden until feature is enabled on server */}
+      {ENABLE_BOOSTS && (
+        <div className="kp-side-card">
+          <div className="kp-side-card-icon">⚡</div>
+          <strong>{lang === 'ar' ? 'ضاعف فرصك' : 'Play smart.'}</strong>
+          <p>{lang === 'ar' ? 'استخدم مضاعف النقاط في الجولة المناسبة.' : 'Use your x2 boost when it matters most.'}</p>
+          <button onClick={() => (user ? setTab('matches') : (window.location.href = `${API_BASE}/auth/kick`))}>
+            {lang === 'ar' ? 'ابدأ التوقع' : 'Make your picks'} <span>→</span>
+          </button>
+        </div>
+      )}
 
       <div className="kp-sidebar-foot">
         KICKPREDICT <span>© 2026</span>

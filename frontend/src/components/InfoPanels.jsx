@@ -20,6 +20,7 @@ export function CupPanel({ lang, setTab }) {
 }
 
 export function RulesPanel({ lang, t, setTab }) {
+  const ENABLE_BOOSTS = false; // Toggle to true when boost is enabled on server
   return (
     <div className="kp-panel kp-rules-panel">
       <div className="kp-section-kicker">HOW TO PLAY</div>
@@ -44,15 +45,18 @@ export function RulesPanel({ lang, t, setTab }) {
               : 'Choose up to three extra markets for every match.'}
           </p>
         </article>
-        <article>
-          <span>03</span>
-          <h3>{lang === 'ar' ? 'ضاعف النقاط' : 'Boost your points'}</h3>
-          <p>
-            {lang === 'ar'
-              ? 'فعّل مضاعف x2 قبل إغلاق المباراة.'
-              : 'Use an x2 boost before the fixture locks.'}
-          </p>
-        </article>
+        {/* Boost rule card hidden until feature is enabled on server */}
+        {ENABLE_BOOSTS && (
+          <article>
+            <span>03</span>
+            <h3>{lang === 'ar' ? 'ضاعف النقاط' : 'Boost your points'}</h3>
+            <p>
+              {lang === 'ar'
+                ? 'فعّل مضاعف x2 قبل إغلاق المباراة.'
+                : 'Use an x2 boost before the fixture locks.'}
+            </p>
+          </article>
+        )}
       </div>
       <button className="kp-primary-small" onClick={() => setTab('matches')}>
         {lang === 'ar' ? 'ابدأ التوقع' : 'Start predicting'} →

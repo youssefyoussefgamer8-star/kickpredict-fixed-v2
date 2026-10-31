@@ -22,6 +22,8 @@ function getInitialPlaceholderDates() {
 const PLACEHOLDER_DATES = getInitialPlaceholderDates();
 
 export default function App() {
+  const ENABLE_BOOSTS = false; // Toggle to true when boost is enabled on server
+  const ENABLE_CUP = false; // Toggle to true when cup competitions are ready
   const [lang, setLang] = useState('en');
   const [tab, setTab] = useState('matches');
   const [user, setUser] = useState(null);
@@ -193,7 +195,7 @@ export default function App() {
   const navItems = [
     { key: 'matches', label: lang === 'ar' ? 'المباريات' : 'Matches', icon: '⚽' },
     { key: 'leaderboard', label: lang === 'ar' ? 'الترتيب' : 'Table', icon: '▤' },
-    { key: 'cup', label: lang === 'ar' ? 'الكأس' : 'Cup', icon: '🏆' },
+    ...(ENABLE_CUP ? [{ key: 'cup', label: lang === 'ar' ? 'الكأس' : 'Cup', icon: '🏆' }] : []),
     { key: 'rules', label: lang === 'ar' ? 'القوانين' : 'Rules', icon: 'ⓘ' },
     { key: 'profile', label: lang === 'ar' ? 'حسابي' : 'My Profile', icon: '◉' }
   ];
@@ -299,12 +301,15 @@ export default function App() {
                 </div>
                 <div className="kp-match-toolbar-right">
                   {user ? (
-                    <span className="kp-boost-count">
-                      <span>⚡</span>{' '}
-                      {competition === 'ALL'
-                        ? (lang === 'ar' ? 'المضاعفات حسب الدوري' : 'BOOSTS PER LEAGUE')
-                        : `${boostsLeft} / ${data?.maxBoosts ?? 0} ${lang === 'ar' ? 'مضاعفات متبقية' : 'BOOSTS LEFT'}`}
-                    </span>
+                    /* Boost feature disabled on server (MAX_BOOSTS = 0); hidden until enabled */
+                    ENABLE_BOOSTS && (
+                      <span className="kp-boost-count">
+                        <span>⚡</span>{' '}
+                        {competition === 'ALL'
+                          ? (lang === 'ar' ? 'المضاعفات حسب الدوري' : 'BOOSTS PER LEAGUE')
+                          : `${boostsLeft} / ${data?.maxBoosts ?? 0} ${lang === 'ar' ? 'مضاعفات متبقية' : 'BOOSTS LEFT'}`}
+                      </span>
+                    )
                   ) : (
                     <span className="kp-login-hint">
                       {lang === 'ar' ? 'سجّل الدخول لتثبيت التوقعات' : 'Log in to lock in your picks'}
@@ -404,7 +409,8 @@ export default function App() {
             />
           )}
 
-          {tab === 'cup' && <CupPanel lang={lang} setTab={setTab} />}
+          {/* Cup tab hidden until cup fixtures are ready */}
+          {ENABLE_CUP && tab === 'cup' && <CupPanel lang={lang} setTab={setTab} />}
 
           {tab === 'rules' && <RulesPanel lang={lang} t={t} setTab={setTab} />}
 
