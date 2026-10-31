@@ -1,7 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
 import { T } from './constants/translations';
-import { api } from './utils/api';
+import { api, API_BASE } from './utils/api';
 import { localDateKey, formatDayLabel } from './utils/dateUtils';
 import Header from './components/Header';
 import Hero from './components/Hero';
@@ -134,6 +134,28 @@ export default function App() {
       void loadMatches();
     }
   }, [tab, loadMatches]);
+
+  const loadMatchesRef = useRef(loadMatches);
+  useEffect(() => {
+    loadMatchesRef.current = loadMatches;
+  }, [loadMatches]);
+
+  const hasLiveMatch = Boolean((data?.matches || []).some((m) => m.status === 'IN_PLAY'));
+
+  // Light polling: re-fetch matches every 45s only when at least one match is IN_PLAY,
+  // and pause when there are no live matches or the browser tab is hidden.
+  // Using a ref and boolean dependency ensures the timer is created once and not restarted on every data update.
+  useEffect(() => {
+    if (tab !== 'matches' || !hasLiveMatch) return undefined;
+
+    const interval = setInterval(() => {
+      if (!document.hidden) {
+        void loadMatchesRef.current();
+      }
+    }, 45 * 1000);
+
+    return () => clearInterval(interval);
+  }, [tab, hasLiveMatch]);
 
   const loadLeaderboard = useCallback(async () => {
     setLoadError(null);
@@ -311,9 +333,13 @@ export default function App() {
                       </span>
                     )
                   ) : (
-                    <span className="kp-login-hint">
-                      {lang === 'ar' ? 'سجّل الدخول لتثبيت التوقعات' : 'Log in to lock in your picks'}
-                    </span>
+                    <a
+                      href={`${API_BASE}/auth/kick`}
+                      className="kp-login-hint kp-login-link"
+                      title={lang === 'ar' ? 'تسجيل الدخول عبر Kick' : 'Log in with Kick'}
+                    >
+                      <span>↗</span> {lang === 'ar' ? 'سجّل الدخول لتثبيت التوقعات' : 'Log in to lock in your picks'}
+                    </a>
                   )}
                   <button
                     className="kp-refresh-button"
