@@ -1661,12 +1661,6 @@ async function settleFinishedMatches() {
   );
 
   for (const m of finished) {
-    const initiallyHasHt = m.home_ht !== null && m.away_ht !== null;
-    const initiallyHoursSinceKickoff = (Date.now() - new Date(m.utc_date).getTime()) / 3600000;
-
-    // Avoid locking rows that are expected to receive their half-time score shortly.
-    if (!initiallyHasHt && initiallyHoursSinceKickoff < 24) continue;
-
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -1684,12 +1678,6 @@ async function settleFinishedMatches() {
       }
       const lockedMatch = locked.rows[0];
       if (lockedMatch.home_score === null || lockedMatch.away_score === null) {
-        await client.query('ROLLBACK');
-        continue;
-      }
-      const hasHt = lockedMatch.home_ht !== null && lockedMatch.away_ht !== null;
-      const hoursSinceKickoff = (Date.now() - new Date(lockedMatch.utc_date).getTime()) / 3600000;
-      if (!hasHt && hoursSinceKickoff < 24) {
         await client.query('ROLLBACK');
         continue;
       }
@@ -1774,9 +1762,8 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// Match/result sync: every 10 minutes by default. The per-competition delay respects the
-// football-data.org free-tier rate limit.
-const SYNC_CRON = process.env.SYNC_CRON || '*/2 * * * *';
+// Match/result sync: every 5 minutes by default (well under football-data.org 10 req/min limit).
+const SYNC_CRON = process.env.SYNC_CRON || '*/5 * * * *';
 if (!cron.validate(SYNC_CRON)) {
   console.error(`[FATAL] Invalid SYNC_CRON expression: ${SYNC_CRON}`);
 } else {
