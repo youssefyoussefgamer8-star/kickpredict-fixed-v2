@@ -92,7 +92,7 @@ export default function App() {
     try {
       setLoadError(null);
       let nextData;
-      if (competition === 'ALL') {
+      if (competition === 'ALL' || competition === 'LIVE') {
         const leagueData = await Promise.all(competitions.map((c) =>
           api(`/matches?${new URLSearchParams({ competition: c.code }).toString()}`)
             .then((result) => ({ ...result, _competitionName: c.name, _competitionCode: c.code }))
@@ -105,7 +105,7 @@ export default function App() {
           _maxBoosts: result.maxBoosts || 0
         })));
         nextData = {
-          competition: 'ALL',
+          competition,
           rounds: [],
           round: null,
           maxBoosts: 0,
@@ -140,11 +140,13 @@ export default function App() {
     loadMatchesRef.current = loadMatches;
   }, [loadMatches]);
 
-  const hasLiveMatch = Boolean((data?.matches || []).some((m) => m.status === 'IN_PLAY'));
+  const hasLiveMatch = Boolean(
+    (data?.matches || []).some((m) => m.status === 'IN_PLAY' || m.status === 'PAUSED') ||
+    competition === 'LIVE'
+  );
 
-  // Light polling: re-fetch matches every 45s only when at least one match is IN_PLAY,
-  // and pause when there are no live matches or the browser tab is hidden.
-  // Using a ref and boolean dependency ensures the timer is created once and not restarted on every data update.
+  // Light polling: re-fetch matches every 45s when at least one match is live (IN_PLAY or PAUSED)
+  // or when viewing the LIVE tab, and pause when there are no live matches or the browser tab is hidden.
   useEffect(() => {
     if (tab !== 'matches' || !hasLiveMatch) return undefined;
 
@@ -199,6 +201,11 @@ export default function App() {
   const placeholderDates = PLACEHOLDER_DATES;
 
   const selectedMatches = allMatches.filter((m) => {
+    if (competition === 'LIVE') {
+      const isLive = m.status === 'IN_PLAY' || m.status === 'PAUSED';
+      const teamMatches = !selectedTeam || m.home_team === selectedTeam || m.away_team === selectedTeam;
+      return isLive && teamMatches;
+    }
     const dateMatches = !selectedDate || localDateKey(m.utc_date) === selectedDate;
     const teamMatches = !selectedTeam || m.home_team === selectedTeam || m.away_team === selectedTeam;
     return dateMatches && teamMatches;
@@ -206,7 +213,7 @@ export default function App() {
 
   const followedTeams = Array.from(new Set(allMatches.flatMap((m) => [m.home_team, m.away_team]).filter(Boolean))).slice(0, 8);
 
-  const matchGroups = competition === 'ALL'
+  const matchGroups = (competition === 'ALL' || competition === 'LIVE')
     ? competitions.map((c) => ({
         code: c.code,
         name: c.name,
@@ -302,55 +309,76 @@ export default function App() {
 
               <div className="kp-section-head">
                 <div>
-                  <div className="kp-section-kicker">{lang === 'ar' ? 'مركز المباريات' : 'MATCH CENTRE'}</div>
-                  <h2>{lang === 'ar' ? 'اختر مبارياتك' : 'Pick your matches'} <span className="kp-live-pip" /></h2>
-                  <p>{lang === 'ar' ? 'اختر اليوم، ثم ثبّت توقعاتك قبل انطلاق المباراة.' : 'Choose a day, lock in your picks before kick-off.'}</p>
+                  <div className="kp-section-kicker">
+                    {competition === 'LIVE'
+                      ? (lang === 'ar' ? 'مباريات مباشرة' : 'LIVE MATCHES')
+                      : (lang === 'ar' ? 'مركز المباريات' : 'MATCH CENTRE')}
+                  </div>
+                  <h2>
+                    {competition === 'LIVE'
+                      ? (lang === 'ar' ? 'المباريات المباشرة الآن' : 'Live In-Play Matches')
+                      : (lang === 'ar' ? 'اختر مبارياتك' : 'Pick your matches')}{' '}
+                    <span className="kp-live-pip" />
+                  </h2>
+                  <p>
+                    {competition === 'LIVE'
+                      ? (lang === 'ar' ? 'متابعة حية لنتائج وأحداث المباريات الجارية الآن.' : 'Live scores and ongoing action happening right now.')
+                      : (lang === 'ar' ? 'اختر اليوم، ثم ثبّت توقعاتك قبل انطلاق المباراة.' : 'Choose a day, lock in your picks before kick-off.')}
+                  </p>
                 </div>
                 <div className="kp-round-badge">
-                  <span className="kp-round-star">✦</span>
+                  <span className="kp-round-star">{competition === 'LIVE' ? '🔴' : '✦'}</span>
                   <span>
-                    <small>{lang === 'ar' ? 'الجولة الحالية' : 'CURRENT ROUND'}</small>
-                    <strong>{roundLabel || (lang === 'ar' ? 'الجولة' : 'Matchday')}</strong>
+                    <small>{competition === 'LIVE' ? (lang === 'ar' ? 'حالة البث' : 'STATUS') : (lang === 'ar' ? 'الجولة الحالية' : 'CURRENT ROUND')}</small>
+                    <strong>{competition === 'LIVE' ? (lang === 'ar' ? 'مباشر' : 'Live') : (roundLabel || (lang === 'ar' ? 'الجولة' : 'Matchday'))}</strong>
                   </span>
                 </div>
               </div>
 
-              <div className="kp-date-strip" aria-label="Choose match day">
-                {availableDates.length ? availableDates.slice(0, 9).map((date) => {
-                  const label = formatDayLabel(date, lang);
-                  const dayCount = allMatches.filter((m) => localDateKey(m.utc_date) === date).length;
-                  return (
-                    <button
-                      key={date}
-                      onClick={() => setSelectedDate(date)}
-                      className={`kp-date-chip ${selectedDate === date ? 'is-active' : ''}`}
-                    >
-                      <span className="kp-date-weekday">{label.weekday}</span>
-                      <strong>{label.day}</strong>
-                      <span className="kp-date-month">{label.month}</span>
-                      <span className="kp-date-count">
-                        {dayCount} {lang === 'ar' ? 'مباريات' : 'MATCH' + (dayCount === 1 ? '' : 'ES')}
-                      </span>
-                    </button>
-                  );
-                }) : placeholderDates.map((key) => {
-                  const label = formatDayLabel(key, lang);
-                  return (
-                    <div key={key} className="kp-date-chip is-disabled">
-                      <span className="kp-date-weekday">{label.weekday}</span>
-                      <strong>{label.day}</strong>
-                      <span className="kp-date-month">{label.month}</span>
-                      <span className="kp-date-count">—</span>
-                    </div>
-                  );
-                })}
-              </div>
+              {competition !== 'LIVE' && (
+                <div className="kp-date-strip" aria-label="Choose match day">
+                  {availableDates.length ? availableDates.slice(0, 9).map((date) => {
+                    const label = formatDayLabel(date, lang);
+                    const dayCount = allMatches.filter((m) => localDateKey(m.utc_date) === date).length;
+                    return (
+                      <button
+                        key={date}
+                        onClick={() => setSelectedDate(date)}
+                        className={`kp-date-chip ${selectedDate === date ? 'is-active' : ''}`}
+                      >
+                        <span className="kp-date-weekday">{label.weekday}</span>
+                        <strong>{label.day}</strong>
+                        <span className="kp-date-month">{label.month}</span>
+                        <span className="kp-date-count">
+                          {dayCount} {lang === 'ar' ? 'مباريات' : 'MATCH' + (dayCount === 1 ? '' : 'ES')}
+                        </span>
+                      </button>
+                    );
+                  }) : placeholderDates.map((key) => {
+                    const label = formatDayLabel(key, lang);
+                    return (
+                      <div key={key} className="kp-date-chip is-disabled">
+                        <span className="kp-date-weekday">{label.weekday}</span>
+                        <strong>{label.day}</strong>
+                        <span className="kp-date-month">{label.month}</span>
+                        <span className="kp-date-count">—</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
 
               <div className="kp-match-toolbar">
                 <div className="kp-filter-summary">
-                  <span className="kp-filter-icon">☷</span>
+                  <span className="kp-filter-icon">{competition === 'LIVE' ? '🔴' : '☷'}</span>
                   <strong>
-                    {selectedTeam || (competition === 'ALL' ? (lang === 'ar' ? 'كل الدوريات' : 'All Leagues') : competitions.find((c) => c.code === competition)?.name) || 'All Leagues'}
+                    {selectedTeam ||
+                      (competition === 'LIVE'
+                        ? (lang === 'ar' ? 'مباشر الآن' : 'Live In-Play')
+                        : competition === 'ALL'
+                          ? (lang === 'ar' ? 'كل الدوريات' : 'All Leagues')
+                          : competitions.find((c) => c.code === competition)?.name) ||
+                      'All Leagues'}
                   </strong>
                   <span className="kp-filter-muted">{selectedMatches.length} {lang === 'ar' ? 'مباريات' : 'matches'}</span>
                 </div>
@@ -360,7 +388,7 @@ export default function App() {
                     ENABLE_BOOSTS && (
                       <span className="kp-boost-count">
                         <span>⚡</span>{' '}
-                        {competition === 'ALL'
+                        {(competition === 'ALL' || competition === 'LIVE')
                           ? (lang === 'ar' ? 'المضاعفات حسب الدوري' : 'BOOSTS PER LEAGUE')
                           : `${boostsLeft} / ${data?.maxBoosts ?? 0} ${lang === 'ar' ? 'مضاعفات متبقية' : 'BOOSTS LEFT'}`}
                       </span>
@@ -391,13 +419,24 @@ export default function App() {
                 </div>
               ) : !selectedMatches.length ? (
                 <div className="kp-empty-state">
-                  <div className="kp-empty-ball">⚽</div>
+                  <div className="kp-empty-ball">{competition === 'LIVE' ? '🔴' : '⚽'}</div>
                   <strong>
                     {selectedTeam
                       ? (lang === 'ar' ? 'لا توجد مباريات لهذا الفريق في هذا اليوم' : 'No matches for this team on this day')
-                      : t.noMatches}
+                      : competition === 'LIVE'
+                        ? (lang === 'ar' ? 'لا توجد مباريات مباشرة حالياً' : 'No live matches at the moment')
+                        : t.noMatches}
                   </strong>
-                  <p>{lang === 'ar' ? 'جرّب يومًا آخر أو اختر دوريًا مختلفًا.' : 'Try another day or choose a different league.'}</p>
+                  <p>
+                    {competition === 'LIVE'
+                      ? (lang === 'ar' ? 'لا توجد أي مباراة تلعب الآن. تصفح باقي الدوريات لمتابعة جدول المباريات القادمة.' : 'No matches are currently in progress. Select a league or All Leagues to check upcoming fixtures.')
+                      : (lang === 'ar' ? 'جرّب يومًا آخر أو اختر دوريًا مختلفًا.' : 'Try another day or choose a different league.')}
+                  </p>
+                  {competition === 'LIVE' && (
+                    <button className="kp-primary-small" onClick={() => changeCompetition('ALL')}>
+                      {lang === 'ar' ? 'عرض كل الدوريات' : 'View All Leagues'}
+                    </button>
+                  )}
                   {selectedTeam && (
                     <button className="kp-primary-small" onClick={() => setSelectedTeam('')}>
                       {lang === 'ar' ? 'عرض كل المباريات' : 'Show all matches'}
@@ -422,13 +461,13 @@ export default function App() {
                             user={user}
                             lang={lang}
                             t={t}
-                            boostsLeft={competition === 'ALL' ? (m._boostsLeft ?? 0) : boostsLeft}
+                            boostsLeft={(competition === 'ALL' || competition === 'LIVE') ? (m._boostsLeft ?? 0) : boostsLeft}
                             onSaved={(prediction, boostsUsed) => {
                               setData((prev) => ({
                                 ...prev,
-                                boostsUsed: competition === 'ALL' ? prev.boostsUsed : boostsUsed,
+                                boostsUsed: (competition === 'ALL' || competition === 'LIVE') ? prev.boostsUsed : boostsUsed,
                                 matches: prev.matches.map((x) => {
-                                  const sameLeagueRound = competition === 'ALL' && x._competitionCode === m._competitionCode;
+                                  const sameLeagueRound = (competition === 'ALL' || competition === 'LIVE') && x._competitionCode === m._competitionCode;
                                   if (x.id === m.id) {
                                     return {
                                       ...x,

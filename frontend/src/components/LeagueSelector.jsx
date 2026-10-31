@@ -19,6 +19,7 @@ export default function LeagueSelector({
   allMatches = []
 }) {
   const isAr = lang === 'ar';
+  const liveCount = allMatches.filter((m) => m.status === 'IN_PLAY' || m.status === 'PAUSED').length;
 
   return (
     <div className="w-full mb-6">
@@ -34,6 +35,42 @@ export default function LeagueSelector({
 
       {/* Horizontal Scrollable Bar with smooth scrollbar-hidden style */}
       <div className="flex items-center gap-2.5 overflow-x-auto pb-2 pt-0.5 scroll-smooth no-scrollbar">
+        {/* Live Matches Pill */}
+        <button
+          type="button"
+          onClick={() => changeCompetition('LIVE')}
+          className={`group inline-flex shrink-0 items-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all duration-150 active:scale-95 ${
+            competition === 'LIVE'
+              ? 'bg-red-600 text-white shadow-lg shadow-red-600/30 scale-[1.02] border border-red-500'
+              : 'bg-[#1a1a1a] text-gray-300 border border-[#2a2a2a] hover:bg-[#252525] hover:text-white hover:border-red-500/50'
+          }`}
+        >
+          <span className="relative flex h-2.5 w-2.5 items-center justify-center">
+            {liveCount > 0 && (
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+            )}
+            <span
+              className={`relative inline-flex rounded-full h-2 w-2 ${
+                competition === 'LIVE' ? 'bg-white' : 'bg-red-500 animate-pulse'
+              }`}
+            />
+          </span>
+          <span className={competition === 'LIVE' ? 'text-white font-black' : 'text-red-400 group-hover:text-red-300'}>
+            {isAr ? 'مباشر 🔴' : 'Live 🔴'}
+          </span>
+          {liveCount > 0 && (
+            <span
+              className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-bold ${
+                competition === 'LIVE'
+                  ? 'bg-black/30 text-white'
+                  : 'bg-red-500/20 text-red-400 border border-red-500/30'
+              }`}
+            >
+              {liveCount}
+            </span>
+          )}
+        </button>
+
         {/* All Leagues Pill */}
         <button
           type="button"
