@@ -20,6 +20,13 @@ const {
   DEFAULT_AVG_AWAY
 } = require('./pricingEngine');
 
+const {
+  shouldAllowCorrection,
+  cleanExtrasPicks,
+  MAX_CORRECTION_HOURS,
+  MIN_CORRECTION_INTERVAL_MS
+} = require('./settlementCorrection');
+
 // ---------------------------------------------------------------------------
 // 1. Startup validation (fail fast)
 // ---------------------------------------------------------------------------
@@ -1213,6 +1220,9 @@ async function syncCompetition(code) {
 
   if (rows.length === 0) return true;
 
+  // Auto-correct any finished matches whose scores have been updated by the provider within 48h
+  await reconcileScoreCorrections(rows);
+
   await pool.query(
     `INSERT INTO matches (
        external_id, competition_code, matchday, stage, round_key, round_label,
@@ -1239,11 +1249,31 @@ async function syncCompetition(code) {
        away_team = EXCLUDED.away_team,
        away_crest = EXCLUDED.away_crest,
        utc_date = EXCLUDED.utc_date,
-       status = CASE WHEN matches.points_calculated THEN matches.status ELSE EXCLUDED.status END,
-       home_score = CASE WHEN matches.points_calculated THEN matches.home_score ELSE EXCLUDED.home_score END,
-       away_score = CASE WHEN matches.points_calculated THEN matches.away_score ELSE EXCLUDED.away_score END,
-       home_ht = CASE WHEN matches.points_calculated THEN matches.home_ht ELSE EXCLUDED.home_ht END,
-       away_ht = CASE WHEN matches.points_calculated THEN matches.away_ht ELSE EXCLUDED.away_ht END,
+       status = CASE
+         WHEN matches.points_calculated AND matches.utc_date < NOW() - INTERVAL '48 hours' THEN matches.status
+         WHEN matches.points_calculated AND (EXCLUDED.status != 'FINISHED' OR EXCLUDED.home_score IS NULL OR EXCLUDED.away_score IS NULL) THEN matches.status
+         ELSE EXCLUDED.status
+       END,
+       home_score = CASE
+         WHEN matches.points_calculated AND matches.utc_date < NOW() - INTERVAL '48 hours' THEN matches.home_score
+         WHEN matches.points_calculated AND (EXCLUDED.status != 'FINISHED' OR EXCLUDED.home_score IS NULL OR EXCLUDED.away_score IS NULL) THEN matches.home_score
+         ELSE EXCLUDED.home_score
+       END,
+       away_score = CASE
+         WHEN matches.points_calculated AND matches.utc_date < NOW() - INTERVAL '48 hours' THEN matches.away_score
+         WHEN matches.points_calculated AND (EXCLUDED.status != 'FINISHED' OR EXCLUDED.home_score IS NULL OR EXCLUDED.away_score IS NULL) THEN matches.away_score
+         ELSE EXCLUDED.away_score
+       END,
+       home_ht = CASE
+         WHEN matches.points_calculated AND matches.utc_date < NOW() - INTERVAL '48 hours' THEN matches.home_ht
+         WHEN matches.points_calculated AND (EXCLUDED.status != 'FINISHED' OR EXCLUDED.home_score IS NULL OR EXCLUDED.away_score IS NULL) THEN matches.home_ht
+         ELSE EXCLUDED.home_ht
+       END,
+       away_ht = CASE
+         WHEN matches.points_calculated AND matches.utc_date < NOW() - INTERVAL '48 hours' THEN matches.away_ht
+         WHEN matches.points_calculated AND (EXCLUDED.status != 'FINISHED' OR EXCLUDED.home_score IS NULL OR EXCLUDED.away_score IS NULL) THEN matches.away_ht
+         ELSE EXCLUDED.away_ht
+       END,
        -- Freeze all settlement-related values after points have been awarded.
        home_lambda = CASE
          WHEN matches.points_calculated THEN matches.home_lambda
@@ -1272,8 +1302,354 @@ async function syncCompetition(code) {
 }
 
 // ---------------------------------------------------------------------------
-// 8. Settlement: idempotent, one transaction per match
+// 8. Settlement & Auto-Correction: idempotent, transaction-safe per match
 // ---------------------------------------------------------------------------
+
+/**
+ * Settles a locked match record and its pending predictions within an open transaction.
+ * Saves settled_home_score, settled_away_score, settled_home_ht, settled_away_ht so any
+ * future score revisions can be detected and reconciled cleanly.
+ */
+async function settleMatchRecord(client, lockedMatch) {
+  const outcomes = resolveMarkets({
+    home: lockedMatch.home_score,
+    away: lockedMatch.away_score,
+    htHome: lockedMatch.home_ht,
+    htAway: lockedMatch.away_ht
+  });
+
+  const { rows: preds } = await client.query(
+    `SELECT id, user_id, predicted_outcome, predicted_home, predicted_away, is_boosted,
+            outcome_points_locked, exact_points_locked, extras_picks
+     FROM predictions
+     WHERE match_id = $1 AND points_awarded IS NULL
+     FOR UPDATE`,
+    [lockedMatch.id]
+  );
+
+  for (const pred of preds) {
+    let base = 0;
+
+    // "Who wins" pick
+    if (pred.predicted_outcome && pred.predicted_outcome === outcomes.outcome_1x2) {
+      base += Number(pred.outcome_points_locked || 0);
+    }
+
+    // Exact score pick
+    const hasScore = pred.predicted_home !== null && pred.predicted_away !== null;
+    const isExact = hasScore && `${pred.predicted_home}-${pred.predicted_away}` === outcomes.exact_score;
+    if (isExact) base += Number(pred.exact_points_locked || 0);
+
+    // Extras
+    const picks = Array.isArray(pred.extras_picks) ? pred.extras_picks : [];
+    const settledExtras = picks.map((pick) => {
+      const actual = outcomes.extras ? outcomes.extras[pick.market] : undefined;
+      if (actual === null || actual === undefined) {
+        // Half-time market when provider did not return HT score
+        return { ...pick, status: 'VOID', won: null, points_earned: 0 };
+      }
+      const won = actual === pick.selection;
+      const earned = won ? Number(pick.points_locked || 0) : 0;
+      base += earned;
+      return { ...pick, status: won ? 'WON' : 'LOST', won, points_earned: earned };
+    });
+
+    const finalPoints = base;
+
+    await client.query(
+      `UPDATE predictions
+       SET points_awarded = $1, extras_picks = $2::jsonb, updated_at = NOW()
+       WHERE id = $3`,
+      [finalPoints, JSON.stringify(settledExtras), pred.id]
+    );
+
+    await client.query(
+      `UPDATE users
+       SET total_points = total_points + $1,
+           exact_scores_count = exact_scores_count + $2
+       WHERE id = $3`,
+      [finalPoints, isExact ? 1 : 0, pred.user_id]
+    );
+  }
+
+  await client.query(
+    `UPDATE matches
+     SET points_calculated = TRUE,
+         settled_outcomes = $1::jsonb,
+         settled_home_score = $2,
+         settled_away_score = $3,
+         settled_home_ht = $4,
+         settled_away_ht = $5,
+         updated_at = NOW()
+     WHERE id = $6`,
+    [
+      JSON.stringify(outcomes),
+      lockedMatch.home_score,
+      lockedMatch.away_score,
+      lockedMatch.home_ht,
+      lockedMatch.away_ht,
+      lockedMatch.id
+    ]
+  );
+
+  return { predsCount: preds.length, outcomes };
+}
+
+/**
+ * Reverts previous settlement effects and immediately re-settles on the new score.
+ * Executed in a single atomic transaction with FOR UPDATE row locking.
+ */
+async function correctAndResettleMatch(client, match, newScore) {
+  const oldHome = match.settled_home_score !== null && match.settled_home_score !== undefined
+    ? Number(match.settled_home_score)
+    : Number(match.home_score);
+  const oldAway = match.settled_away_score !== null && match.settled_away_score !== undefined
+    ? Number(match.settled_away_score)
+    : Number(match.away_score);
+  const oldHtHome = match.settled_home_ht !== null && match.settled_home_ht !== undefined
+    ? Number(match.settled_home_ht)
+    : (match.home_ht !== null ? Number(match.home_ht) : null);
+  const oldHtAway = match.settled_away_ht !== null && match.settled_away_ht !== undefined
+    ? Number(match.settled_away_ht)
+    : (match.away_ht !== null ? Number(match.away_ht) : null);
+
+  // 1. Deduct points_awarded and decrement exact_scores_count from users who matched old settled score
+  await client.query(
+    `UPDATE users u
+     SET total_points = GREATEST(0, u.total_points - COALESCE(p.points_awarded, 0)),
+         exact_scores_count = GREATEST(0, u.exact_scores_count - (
+           CASE
+             WHEN p.predicted_home IS NOT NULL
+              AND p.predicted_away IS NOT NULL
+              AND p.predicted_home = $1
+              AND p.predicted_away = $2
+             THEN 1
+             ELSE 0
+           END
+         ))
+     FROM predictions p
+     WHERE p.user_id = u.id
+       AND p.match_id = $3
+       AND p.points_awarded IS NOT NULL`,
+    [oldHome, oldAway, match.id]
+  );
+
+  // 2. Reset predictions: points_awarded = NULL, clean extras_picks (preserve array, never NULL)
+  await client.query(
+    `UPDATE predictions p
+     SET points_awarded = NULL,
+         extras_picks = CASE
+           WHEN p.extras_picks IS NULL OR jsonb_array_length(p.extras_picks) = 0 THEN '[]'::jsonb
+           ELSE COALESCE(
+             (
+               SELECT jsonb_agg(elem - 'status' - 'won' - 'points_earned')
+               FROM jsonb_array_elements(p.extras_picks) AS elem
+             ),
+             '[]'::jsonb
+           )
+         END,
+         updated_at = NOW()
+     WHERE p.match_id = $1`,
+    [match.id]
+  );
+
+  // 3. Update matches with new score and reset settlement flags
+  await client.query(
+    `UPDATE matches
+     SET home_score = $1,
+         away_score = $2,
+         home_ht = $3,
+         away_ht = $4,
+         status = 'FINISHED',
+         points_calculated = FALSE,
+         settled_outcomes = NULL,
+         last_corrected_at = NOW(),
+         updated_at = NOW()
+     WHERE id = $5`,
+    [newScore.home, newScore.away, newScore.htHome, newScore.htAway, match.id]
+  );
+
+  // 4. Re-settle immediately within this exact same transaction
+  const updatedLockedMatch = {
+    ...match,
+    home_score: newScore.home,
+    away_score: newScore.away,
+    home_ht: newScore.htHome,
+    away_ht: newScore.htAway
+  };
+
+  const { predsCount } = await settleMatchRecord(client, updatedLockedMatch);
+
+  console.log(
+    `[Correction] Match ${match.id} (${match.home_team} vs ${match.away_team}): ` +
+    `corrected from ${oldHome}-${oldAway} (HT ${oldHtHome ?? '-'}-${oldHtAway ?? '-'}) ` +
+    `to ${newScore.home}-${newScore.away} (HT ${newScore.htHome ?? '-'}-${newScore.htAway ?? '-'}). ` +
+    `Re-settled for ${predsCount} predictions.`
+  );
+
+  return { predsCount };
+}
+
+/**
+ * Checks incoming sync rows against database-settled matches and performs auto-correction
+ * if provider scores changed within 48h.
+ */
+async function reconcileScoreCorrections(incomingRows) {
+  const finishedRows = (incomingRows || []).filter(
+    (r) => r.status === 'FINISHED' && r.home_score !== null && r.away_score !== null
+  );
+  if (finishedRows.length === 0) return;
+
+  const externalIds = finishedRows.map((r) => r.external_id);
+  const { rows: settledMatches } = await pool.query(
+    `SELECT id, external_id, home_team, away_team, status, utc_date,
+            home_score, away_score, home_ht, away_ht,
+            settled_home_score, settled_away_score, settled_home_ht, settled_away_ht,
+            points_calculated, last_corrected_at
+     FROM matches
+     WHERE external_id = ANY($1::bigint[])
+       AND points_calculated = TRUE
+       AND utc_date >= NOW() - INTERVAL '48 hours'`,
+    [externalIds]
+  );
+
+  for (const match of settledMatches) {
+    const incoming = finishedRows.find((r) => String(r.external_id) === String(match.external_id));
+    if (!incoming) continue;
+
+    const newScore = {
+      home: incoming.home_score,
+      away: incoming.away_score,
+      htHome: incoming.home_ht,
+      htAway: incoming.away_ht
+    };
+
+    const check = shouldAllowCorrection({
+      match,
+      newStatus: incoming.status,
+      newScore
+    });
+
+    if (!check.allow) continue;
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const lockRes = await client.query(
+        `SELECT id, external_id, home_team, away_team, status, utc_date,
+                home_score, away_score, home_ht, away_ht,
+                settled_home_score, settled_away_score, settled_home_ht, settled_away_ht,
+                points_calculated, last_corrected_at
+         FROM matches
+         WHERE id = $1
+         FOR UPDATE`,
+        [match.id]
+      );
+      if (lockRes.rowCount === 0) {
+        await client.query('ROLLBACK');
+        continue;
+      }
+      const lockedMatch = lockRes.rows[0];
+      const recheck = shouldAllowCorrection({
+        match: lockedMatch,
+        newStatus: incoming.status,
+        newScore
+      });
+      if (!recheck.allow) {
+        await client.query('ROLLBACK');
+        continue;
+      }
+
+      await correctAndResettleMatch(client, lockedMatch, newScore);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      console.error(`[Correction] Failed for match ${match.id}:`, err.message);
+    } finally {
+      client.release();
+    }
+  }
+}
+
+/**
+ * Safety net: checks for any settled match in the database where current score differs
+ * from settled score, within 48h, and triggers correction.
+ */
+async function reconcileUnsettledCorrections() {
+  const { rows: discrepancyMatches } = await pool.query(
+    `SELECT id, external_id, home_team, away_team, status, utc_date,
+            home_score, away_score, home_ht, away_ht,
+            settled_home_score, settled_away_score, settled_home_ht, settled_away_ht,
+            points_calculated, last_corrected_at
+     FROM matches
+     WHERE points_calculated = TRUE
+       AND status = 'FINISHED'
+       AND home_score IS NOT NULL
+       AND away_score IS NOT NULL
+       AND utc_date >= NOW() - INTERVAL '48 hours'
+       AND (
+         (settled_home_score IS NOT NULL AND home_score != settled_home_score)
+         OR (settled_away_score IS NOT NULL AND away_score != settled_away_score)
+         OR (settled_home_ht IS NOT NULL AND home_ht IS NOT NULL AND home_ht != settled_home_ht)
+         OR (settled_away_ht IS NOT NULL AND away_ht IS NOT NULL AND away_ht != settled_away_ht)
+       )`
+  );
+
+  for (const match of discrepancyMatches) {
+    const newScore = {
+      home: match.home_score,
+      away: match.away_score,
+      htHome: match.home_ht,
+      htAway: match.away_ht
+    };
+
+    const check = shouldAllowCorrection({
+      match,
+      newStatus: match.status,
+      newScore
+    });
+
+    if (!check.allow) continue;
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const lockRes = await client.query(
+        `SELECT id, external_id, home_team, away_team, status, utc_date,
+                home_score, away_score, home_ht, away_ht,
+                settled_home_score, settled_away_score, settled_home_ht, settled_away_ht,
+                points_calculated, last_corrected_at
+         FROM matches
+         WHERE id = $1
+         FOR UPDATE`,
+        [match.id]
+      );
+      if (lockRes.rowCount === 0) {
+        await client.query('ROLLBACK');
+        continue;
+      }
+      const lockedMatch = lockRes.rows[0];
+      const recheck = shouldAllowCorrection({
+        match: lockedMatch,
+        newStatus: lockedMatch.status,
+        newScore
+      });
+      if (!recheck.allow) {
+        await client.query('ROLLBACK');
+        continue;
+      }
+
+      await correctAndResettleMatch(client, lockedMatch, newScore);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      console.error(`[Correction] Failed for discrepancy match ${match.id}:`, err.message);
+    } finally {
+      client.release();
+    }
+  }
+}
+
 async function settleFinishedMatches() {
   const { rows: finished } = await pool.query(
     `SELECT id, home_score, away_score, home_ht, away_ht, utc_date
@@ -1295,8 +1671,6 @@ async function settleFinishedMatches() {
     try {
       await client.query('BEGIN');
 
-      // Read the scores again while locking the match, so a concurrent data sync
-      // cannot cause us to settle against a stale snapshot.
       const locked = await client.query(
         `SELECT id, home_score, away_score, home_ht, away_ht, utc_date
          FROM matches
@@ -1319,76 +1693,11 @@ async function settleFinishedMatches() {
         await client.query('ROLLBACK');
         continue;
       }
-      const outcomes = resolveMarkets({
-        home: lockedMatch.home_score,
-        away: lockedMatch.away_score,
-        htHome: lockedMatch.home_ht,
-        htAway: lockedMatch.away_ht
-      });
 
-      const { rows: preds } = await client.query(
-        `SELECT id, user_id, predicted_outcome, predicted_home, predicted_away, is_boosted,
-                outcome_points_locked, exact_points_locked, extras_picks
-         FROM predictions
-         WHERE match_id = $1 AND points_awarded IS NULL
-         FOR UPDATE`,
-        [m.id]
-      );
-
-      for (const pred of preds) {
-        let base = 0;
-
-        // "Who wins" pick
-        if (pred.predicted_outcome && pred.predicted_outcome === outcomes.outcome_1x2) {
-          base += Number(pred.outcome_points_locked || 0);
-        }
-
-        // Exact score pick
-        const hasScore = pred.predicted_home !== null && pred.predicted_away !== null;
-        const isExact = hasScore && `${pred.predicted_home}-${pred.predicted_away}` === outcomes.exact_score;
-        if (isExact) base += Number(pred.exact_points_locked || 0);
-
-        // Extras
-        const picks = Array.isArray(pred.extras_picks) ? pred.extras_picks : [];
-        const settledExtras = picks.map((pick) => {
-          const actual = outcomes.extras[pick.market];
-          if (actual === null || actual === undefined) {
-            // Only possible for half-time markets when the API never provided the half-time score
-            return { ...pick, status: 'VOID', won: null, points_earned: 0 };
-          }
-          const won = actual === pick.selection;
-          const earned = won ? Number(pick.points_locked || 0) : 0;
-          base += earned;
-          return { ...pick, status: won ? 'WON' : 'LOST', won, points_earned: earned };
-        });
-
-        const finalPoints = base;
-
-        await client.query(
-          `UPDATE predictions
-           SET points_awarded = $1, extras_picks = $2::jsonb, updated_at = NOW()
-           WHERE id = $3`,
-          [finalPoints, JSON.stringify(settledExtras), pred.id]
-        );
-
-        await client.query(
-          `UPDATE users
-           SET total_points = total_points + $1,
-               exact_scores_count = exact_scores_count + $2
-           WHERE id = $3`,
-          [finalPoints, isExact ? 1 : 0, pred.user_id]
-        );
-      }
-
-      await client.query(
-        `UPDATE matches
-         SET points_calculated = TRUE, settled_outcomes = $1::jsonb, updated_at = NOW()
-         WHERE id = $2`,
-        [JSON.stringify(outcomes), lockedMatch.id]
-      );
+      const { predsCount } = await settleMatchRecord(client, lockedMatch);
 
       await client.query('COMMIT');
-      console.log(`[Settle] Match ${lockedMatch.id} settled (${preds.length} predictions)`);
+      console.log(`[Settle] Match ${lockedMatch.id} settled (${predsCount} predictions)`);
     } catch (err) {
       await client.query('ROLLBACK');
       console.error(`[Settle] Failed for match ${m.id}:`, err.message);
@@ -1413,6 +1722,7 @@ async function syncAll() {
         console.error(`[Sync] ${syncCodes[i]} failed:`, err.message);
       }
     }
+    await reconcileUnsettledCorrections();
     await settleFinishedMatches();
   } catch (err) {
     console.error('[Sync] Unexpected error:', err);
