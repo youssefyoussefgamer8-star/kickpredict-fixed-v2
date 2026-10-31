@@ -10,6 +10,7 @@ const cron = require('node-cron');
 const { Pool } = require('pg');
 const Fotmob = require('fotmob');
 const oddsProvider = require('./oddsProvider');
+const { initTunisiaSync } = require('./sync-tunisia');
 
 const fotmob = new (Fotmob.default || Fotmob)();
 // FotMob modern JSON API endpoints
@@ -84,9 +85,8 @@ const FOTMOB_COMPETITION_IDS = {
   BL1: 54,
   SA: 55,
   FL1: 53,
-  CL: 42,
-  TUN: 544,
-  TU1: 544
+  CL: 42
+
 };
 const FOTMOB_ID_TO_CODE = {
   47: 'PL',
@@ -94,11 +94,11 @@ const FOTMOB_ID_TO_CODE = {
   54: 'BL1',
   55: 'SA',
   53: 'FL1',
-  42: 'CL',
-  544: 'TUN',
-  240: 'TUN'
+  42: 'CL'
+
+
 };
-const FOTMOB_COMPETITIONS = new Set(['PL', 'PD', 'BL1', 'SA', 'FL1', 'CL', 'TUN', 'TU1']);
+const FOTMOB_COMPETITIONS = new Set(['PL', 'PD', 'BL1', 'SA', 'FL1', 'CL']);
 const FOOTBALL_DATA_COMPETITIONS = FOTMOB_COMPETITIONS;
 
 const COMPETITIONS = [...new Set(
@@ -2045,6 +2045,12 @@ const server = app.listen(PORT, async () => {
   console.log(`Competitions: ${COMPETITIONS.join(', ')}`);
   await ensureAutoCorrectionSchema();
   syncAll();
+  initTunisiaSync({
+    pool,
+    cron,
+    settleFinishedMatches,
+    reconcileScoreCorrections
+  });
 });
 
 pool.on('error', (err) => console.error('[Database] Unexpected idle client error:', err.message));
