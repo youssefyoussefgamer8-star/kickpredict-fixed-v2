@@ -1708,10 +1708,45 @@ async function settleFinishedMatches() {
 }
 
 let syncing = false;
+let schemaEnsured = false;
+
+/**
+ * Automatically ensures that the auto-correction tracking columns exist in PostgreSQL.
+ * Runs idempotently on boot so deployments on Render or fresh databases never fail with
+ * column "settled_home_score" does not exist.
+ */
+async function ensureAutoCorrectionSchema() {
+  if (schemaEnsured) return true;
+  try {
+    await pool.query(`
+      ALTER TABLE matches
+        ADD COLUMN IF NOT EXISTS settled_home_score INT,
+        ADD COLUMN IF NOT EXISTS settled_away_score INT,
+        ADD COLUMN IF NOT EXISTS settled_home_ht INT,
+        ADD COLUMN IF NOT EXISTS settled_away_ht INT,
+        ADD COLUMN IF NOT EXISTS last_corrected_at TIMESTAMPTZ;
+
+      UPDATE matches
+      SET settled_home_score = COALESCE(settled_home_score, home_score),
+          settled_away_score = COALESCE(settled_away_score, away_score),
+          settled_home_ht = COALESCE(settled_home_ht, home_ht),
+          settled_away_ht = COALESCE(settled_away_ht, away_ht)
+      WHERE points_calculated = TRUE AND settled_home_score IS NULL;
+    `);
+    schemaEnsured = true;
+    console.log('[Database] Auto-correction columns verified.');
+    return true;
+  } catch (err) {
+    console.error('[Database] Schema verification error:', err.message);
+    return false;
+  }
+}
+
 async function syncAll() {
   if (syncing) return;
   syncing = true;
   try {
+    await ensureAutoCorrectionSchema();
     const syncCodes = COMPETITIONS.filter((code) => FOOTBALL_DATA_COMPETITIONS.has(code));
     for (let i = 0; i < syncCodes.length; i++) {
       if (i > 0) await sleep(SYNC_GAP_MS);
@@ -1771,9 +1806,10 @@ if (oddsProvider.isEnabled()) {
   console.log('[Odds] Disabled (no configured odds API key).');
 }
 
-const server = app.listen(PORT, () => {
+const server = app.listen(PORT, async () => {
   console.log(`KickPredict backend listening on port ${PORT}`);
   console.log(`Competitions: ${COMPETITIONS.join(', ')}`);
+  await ensureAutoCorrectionSchema();
   syncAll();
 });
 

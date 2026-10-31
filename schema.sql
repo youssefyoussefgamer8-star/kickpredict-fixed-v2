@@ -101,6 +101,14 @@ WHERE round_label IS NULL OR BTRIM(round_label) = '';
 UPDATE matches SET home_lambda = 1.45 WHERE home_lambda IS NULL;
 UPDATE matches SET away_lambda = 1.15 WHERE away_lambda IS NULL;
 UPDATE matches SET points_calculated = FALSE WHERE points_calculated IS NULL;
+UPDATE matches
+SET 
+    settled_home_score = COALESCE(settled_home_score, home_score),
+    settled_away_score = COALESCE(settled_away_score, away_score),
+    settled_home_ht = COALESCE(settled_home_ht, home_ht),
+    settled_away_ht = COALESCE(settled_away_ht, away_ht)
+WHERE points_calculated = TRUE 
+  AND settled_home_score IS NULL;
 UPDATE matches SET updated_at = NOW() WHERE updated_at IS NULL;
 
 ALTER TABLE matches ALTER COLUMN round_key SET DEFAULT 'MD-1';
