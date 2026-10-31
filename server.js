@@ -8,7 +8,16 @@ const rateLimit = require('express-rate-limit');
 const jwt = require('jsonwebtoken');
 const cron = require('node-cron');
 const { Pool } = require('pg');
+const Fotmob = require('fotmob');
 const oddsProvider = require('./oddsProvider');
+
+const fotmob = new (Fotmob.default || Fotmob)();
+// FotMob modern JSON API endpoints
+fotmob.matchesUrl = 'https://www.fotmob.com/api/data/matches?';
+fotmob.leaguesUrl = 'https://www.fotmob.com/api/data/leagues?';
+fotmob.allLeaguesUrl = 'https://www.fotmob.com/api/data/allLeagues?';
+fotmob.teamsUrl = 'https://www.fotmob.com/api/data/teams?';
+fotmob.matchDetailsUrl = 'https://www.fotmob.com/api/data/matchDetails?';
 
 const {
   EXTRA_MARKETS,
@@ -36,7 +45,6 @@ const REQUIRED_ENV = [
   'KICK_CLIENT_ID',
   'KICK_CLIENT_SECRET',
   'KICK_REDIRECT_URI',
-  'FOOTBALL_DATA_API_KEY',
   'FRONTEND_URL'
 ];
 
@@ -56,7 +64,7 @@ if (process.env.JWT_SECRET.length < 32) {
 // Boost feature disabled globally
 const MAX_BOOSTS = 0;
 
-// Competitions available on the football-data.org FREE tier
+// Competitions available via FotMob real-time provider
 const COMPETITION_NAMES = {
   PL: 'Premier League',
   PD: 'La Liga',
@@ -67,7 +75,26 @@ const COMPETITION_NAMES = {
   TU1: 'Tunisian Ligue Professionnelle 1',
   DEMO: 'Demo League'
 };
-const FOOTBALL_DATA_COMPETITIONS = new Set(['PL', 'PD', 'BL1', 'SA', 'FL1', 'CL']);
+
+// FotMob league ID mapping
+const FOTMOB_COMPETITION_IDS = {
+  PL: 47,
+  PD: 87,
+  BL1: 54,
+  SA: 55,
+  FL1: 53,
+  CL: 42
+};
+const FOTMOB_ID_TO_CODE = {
+  47: 'PL',
+  87: 'PD',
+  54: 'BL1',
+  55: 'SA',
+  53: 'FL1',
+  42: 'CL'
+};
+const FOTMOB_COMPETITIONS = new Set(['PL', 'PD', 'BL1', 'SA', 'FL1', 'CL']);
+const FOOTBALL_DATA_COMPETITIONS = FOTMOB_COMPETITIONS;
 
 const COMPETITIONS = [...new Set(
   (process.env.COMPETITION_CODES || 'PL,PD,BL1,SA,FL1,CL')
@@ -1103,115 +1130,303 @@ app.get(
 );
 
 // ---------------------------------------------------------------------------
-// 7. football-data.org sync (FREE tier, max 10 requests/minute)
+// 7. FotMob real-time match sync & fixtures
 // ---------------------------------------------------------------------------
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const SYNC_GAP_MS = 7000; // 6 competitions x 1 call, 7s apart => well under 10 req/min
 
-const STAGE_LABELS = {
-  PLAYOFFS: 'Play-offs',
-  LAST_32: 'Round of 32',
-  LAST_16: 'Round of 16',
-  QUARTER_FINALS: 'Quarter-finals',
-  SEMI_FINALS: 'Semi-finals',
-  THIRD_PLACE: 'Third place',
-  FINAL: 'Final'
+const FOTMOB_TEAM_ALIASES = {
+  // PD
+  8634: 'Barça',
+  9906: 'Atleti',
+  // FL1
+  9851: 'Stade Rennais',
+  9847: 'PSG',
+  8588: 'RC Lens',
+  // BL1
+  9790: 'HSV',
+  9823: 'Bayern',
+  8697: 'Bremen',
+  9789: 'Dortmund',
+  9810: 'Frankfurt',
+  8178: 'Leverkusen',
+  10269: 'Stuttgart',
+  // PL
+  8456: 'Man City',
+  10260: 'Man United',
+  10204: 'Brighton Hove',
+  10203: 'Nottingham',
+  // SA
+  8636: 'Inter',
+  8564: 'Milan',
+  // CL
+  8563: 'PAE AEK',
+  9728: 'Shaktar',
+  7787: 'Slavia Praha',
+  6019: 'Sl. Bratislava'
 };
-const LEAGUE_STAGES = ['REGULAR_SEASON', 'LEAGUE_STAGE'];
 
-function roundInfo(m) {
-  const stage = m.stage || 'REGULAR_SEASON';
-  const md = Number.isInteger(m.matchday) ? m.matchday : null;
-  if (LEAGUE_STAGES.includes(stage) && md) {
-    return { stage, matchday: md, key: `MD:${md}`, label: `Matchday ${md}` };
-  }
-  const pretty =
-    STAGE_LABELS[stage] ||
-    stage
-      .toLowerCase()
-      .split('_')
-      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-      .join(' ');
-  return { stage, matchday: md, key: stage, label: pretty };
+function normalizeTeamName(team) {
+  if (!team) return 'TBD';
+  const id = Number(team.id);
+  if (id && FOTMOB_TEAM_ALIASES[id]) return FOTMOB_TEAM_ALIASES[id];
+  return team.shortName || team.name || 'TBD';
 }
 
-const scoreOf = (s) => ({
-  home: s ? s.home ?? s.homeTeam ?? null : null,
-  away: s ? s.away ?? s.awayTeam ?? null : null
-});
+function checkTeamsMatch(dbTeamName, fmTeam) {
+  if (!dbTeamName || !fmTeam) return false;
+  const db = dbTeamName.toLowerCase().trim();
+  const alias = FOTMOB_TEAM_ALIASES[Number(fmTeam.id)];
+  if (alias && (db === alias.toLowerCase() || db.includes(alias.toLowerCase()) || alias.toLowerCase().includes(db))) {
+    return true;
+  }
+  const name = (fmTeam.name || '').toLowerCase().trim();
+  const short = (fmTeam.shortName || '').toLowerCase().trim();
+  if (name && (db === name || db.includes(name) || name.includes(db))) return true;
+  if (short && (db === short || db.includes(short) || short.includes(db))) return true;
+  return false;
+}
+
+function mapFotmobStatus(status) {
+  if (!status) return 'SCHEDULED';
+  if (status.cancelled) return 'CANCELLED';
+  if (status.finished) return 'FINISHED';
+  if (status.ongoing) {
+    const reason = status.reason?.short || status.reason?.shortKey;
+    if (reason === 'HT' || reason === 'halftime_short') return 'PAUSED';
+    return 'IN_PLAY';
+  }
+  if (status.started) return 'IN_PLAY';
+  return 'TIMED';
+}
+
+function parseFotmobScore(homeScore, awayScore, scoreStr) {
+  if (homeScore !== undefined && homeScore !== null && awayScore !== undefined && awayScore !== null) {
+    const h = Number(homeScore);
+    const a = Number(awayScore);
+    if (!isNaN(h) && !isNaN(a)) return { home: h, away: a };
+  }
+  if (typeof scoreStr === 'string' && scoreStr.includes('-')) {
+    const parts = scoreStr.split('-').map((s) => s.trim());
+    if (parts.length === 2) {
+      const h = parseInt(parts[0], 10);
+      const a = parseInt(parts[1], 10);
+      if (!isNaN(h) && !isNaN(a)) return { home: h, away: a };
+    }
+  }
+  return { home: null, away: null };
+}
+
+function roundInfoFromFotmob(m) {
+  const roundStr = String(m.round || m.roundName || '');
+  const md = parseInt(roundStr, 10);
+  if (Number.isInteger(md) && md > 0) {
+    return { stage: 'REGULAR_SEASON', matchday: md, key: `MD:${md}`, label: `Matchday ${md}` };
+  }
+  const clean = roundStr.replace(/_/g, ' ').trim() || 'Matchday 1';
+  return { stage: 'REGULAR_SEASON', matchday: null, key: clean, label: clean };
+}
 
 /**
- * Score used for settlement: the 90-minute result.
- * football-data's fullTime includes extra time / penalties for knockout matches,
- * so when the match went beyond 90 minutes we use score.regularTime instead.
+ * Fast real-time live sync using FotMob matches-by-date.
+ * Fetches today's matches (and yesterday's for recently finished overnight matches),
+ * updates match statuses and scores in real time, and triggers immediate settlement.
  */
-function settlementScore(score) {
-  const full = scoreOf(score && score.fullTime);
-  const regular = scoreOf(score && score.regularTime);
-  const beyond90 = score && score.duration && score.duration !== 'REGULAR';
-  if (beyond90 && regular.home !== null && regular.away !== null) return regular;
-  return full;
+async function syncLiveMatches() {
+  const dates = [];
+  const now = new Date();
+  const todayStr = now.toISOString().slice(0, 10).replace(/-/g, '');
+  dates.push(todayStr);
+
+  if (now.getUTCHours() < 6) {
+    const yesterday = new Date(now.getTime() - 24 * 3600 * 1000);
+    dates.push(yesterday.toISOString().slice(0, 10).replace(/-/g, ''));
+  }
+
+  const updatedMatchRows = [];
+
+  for (const dateStr of dates) {
+    try {
+      const data = await fotmob.getMatchesByDate(dateStr);
+      const leagues = Array.isArray(data?.leagues) ? data.leagues : [];
+
+      for (const league of leagues) {
+        const leagueId = league.primaryId || league.id;
+        const code = FOTMOB_ID_TO_CODE[leagueId];
+        if (!code || !COMPETITIONS.includes(code)) continue;
+
+        const matches = Array.isArray(league.matches) ? league.matches : [];
+        if (matches.length === 0) continue;
+
+        const { rows: dbMatches } = await pool.query(
+          `SELECT id, external_id, home_team, away_team, utc_date, status, home_score, away_score,
+                  home_ht, away_ht, fotmob_id, points_calculated
+           FROM matches
+           WHERE competition_code = $1`,
+          [code]
+        );
+
+        for (const fm of matches) {
+          const homeTeam = normalizeTeamName(fm.home);
+          const awayTeam = normalizeTeamName(fm.away);
+          const mDate = new Date(fm.status?.utcTime || fm.timeTS);
+          const fmStatus = mapFotmobStatus(fm.status);
+          const score = parseFotmobScore(fm.home?.score, fm.away?.score, fm.status?.scoreStr);
+
+          // Find matching DB row
+          const dbMatch = dbMatches.find((ex) => {
+            if (ex.fotmob_id && String(ex.fotmob_id) === String(fm.id)) return true;
+            const teamsMatch = checkTeamsMatch(ex.home_team, fm.home) && checkTeamsMatch(ex.away_team, fm.away);
+            if (!teamsMatch) return false;
+            const diffHours = Math.abs(new Date(ex.utc_date).getTime() - mDate.getTime()) / 3600000;
+            return diffHours <= 36;
+          });
+
+          if (!dbMatch) continue;
+
+          let newHtHome = dbMatch.home_ht;
+          let newHtAway = dbMatch.away_ht;
+          if (fmStatus === 'PAUSED' && score.home !== null && score.away !== null) {
+            newHtHome = score.home;
+            newHtAway = score.away;
+          }
+
+          const statusChanged = dbMatch.status !== fmStatus;
+          const scoreChanged = (score.home !== null && score.home !== dbMatch.home_score) ||
+                               (score.away !== null && score.away !== dbMatch.away_score);
+
+          if (statusChanged || scoreChanged || !dbMatch.fotmob_id) {
+            const finalStatus = dbMatch.points_calculated && (Date.now() - new Date(dbMatch.utc_date).getTime() > 48 * 3600000)
+              ? dbMatch.status
+              : fmStatus;
+
+            await pool.query(
+              `UPDATE matches
+               SET status = $1,
+                   home_score = COALESCE($2, home_score),
+                   away_score = COALESCE($3, away_score),
+                   home_ht = COALESCE($4, home_ht),
+                   away_ht = COALESCE($5, away_ht),
+                   fotmob_id = $6,
+                   updated_at = NOW()
+               WHERE id = $7`,
+              [
+                finalStatus,
+                score.home,
+                score.away,
+                newHtHome,
+                newHtAway,
+                Number(fm.id),
+                dbMatch.id
+              ]
+            );
+
+            updatedMatchRows.push({
+              external_id: dbMatch.external_id,
+              competition_code: code,
+              home_score: score.home,
+              away_score: score.away,
+              home_ht: newHtHome,
+              away_ht: newHtAway,
+              status: finalStatus
+            });
+          }
+        }
+      }
+    } catch (err) {
+      console.error(`[SyncLive] Failed for date ${dateStr}:`, err.message);
+    }
+  }
+
+  if (updatedMatchRows.length > 0) {
+    console.log(`[SyncLive] Updated ${updatedMatchRows.length} matches with live FotMob data.`);
+    await reconcileScoreCorrections(updatedMatchRows);
+  }
 }
 
 async function syncCompetition(code) {
-  const res = await fetch(`https://api.football-data.org/v4/competitions/${code}/matches`, {
-    headers: { 'X-Auth-Token': process.env.FOOTBALL_DATA_API_KEY },
-    signal: AbortSignal.timeout(20000)
-  });
-
-  if (res.status === 429) {
-    console.warn(`[Sync] ${code}: rate limited by football-data.org, will retry next run.`);
-    return false;
-  }
-  if (!res.ok) {
-    console.error(`[Sync] ${code}: football-data.org returned HTTP ${res.status}`);
+  const leagueId = FOTMOB_COMPETITION_IDS[code];
+  if (!leagueId) {
+    console.warn(`[Sync] Unsupported FotMob competition: ${code}`);
     return true;
   }
 
-  const data = await res.json();
-  const all = Array.isArray(data.matches) ? data.matches : [];
+  let data;
+  try {
+    data = await fotmob.getLeague(leagueId);
+  } catch (err) {
+    console.error(`[Sync] FotMob getLeague(${leagueId}) failed for ${code}:`, err.message);
+    return true;
+  }
 
-  // Matches with both teams known
-  const valid = all.filter((m) => m.homeTeam && m.homeTeam.id && m.awayTeam && m.awayTeam.id && m.id);
+  const all = Array.isArray(data?.fixtures?.allMatches) ? data.fixtures.allMatches : [];
+  const valid = all.filter((m) => m.home && m.home.id && m.away && m.away.id && m.id);
+
+  if (valid.length === 0) return true;
 
   // Expected goals model from finished matches of this competition
   const finishedForModel = [];
   for (const m of valid) {
-    if (m.status !== 'FINISHED') continue;
-    const s = settlementScore(m.score);
+    const st = mapFotmobStatus(m.status);
+    if (st !== 'FINISHED') continue;
+    const s = parseFotmobScore(m.home?.score, m.away?.score, m.status?.scoreStr);
     if (s.home === null || s.away === null) continue;
     finishedForModel.push({
-      homeId: m.homeTeam.id,
-      awayId: m.awayTeam.id,
+      homeId: Number(m.home.id),
+      awayId: Number(m.away.id),
       homeGoals: s.home,
       awayGoals: s.away
     });
   }
   const model = teamRatings(finishedForModel);
 
+  // Fetch existing matches in DB to link existing external_id and fotmob_id
+  const { rows: existingRows } = await pool.query(
+    `SELECT id, external_id, home_team, away_team, utc_date, fotmob_id
+     FROM matches
+     WHERE competition_code = $1`,
+    [code]
+  );
+
   const rows = valid.map((m) => {
-    const info = roundInfo(m);
-    const result = settlementScore(m.score);
-    const ht = scoreOf(m.score && m.score.halfTime);
-    const { lambdaHome, lambdaAway } = matchLambdas(m.homeTeam.id, m.awayTeam.id, model);
+    const info = roundInfoFromFotmob(m);
+    const score = parseFotmobScore(m.home?.score, m.away?.score, m.status?.scoreStr);
+    const { lambdaHome, lambdaAway } = matchLambdas(Number(m.home.id), Number(m.away.id), model);
+    const homeTeam = normalizeTeamName(m.home);
+    const awayTeam = normalizeTeamName(m.away);
+    const mDate = new Date(m.status?.utcTime || m.timeTS);
+
+    // Link to existing DB match if possible
+    let extId = Number(m.id);
+    const foundExisting = existingRows.find((ex) => {
+      if (ex.fotmob_id && String(ex.fotmob_id) === String(m.id)) return true;
+      const teamsMatch = checkTeamsMatch(ex.home_team, m.home) && checkTeamsMatch(ex.away_team, m.away);
+      if (!teamsMatch) return false;
+      const diffHours = Math.abs(new Date(ex.utc_date).getTime() - mDate.getTime()) / 3600000;
+      return diffHours <= 36;
+    });
+
+    if (foundExisting) {
+      extId = Number(foundExisting.external_id);
+    }
 
     return {
-      external_id: m.id,
+      external_id: extId,
+      fotmob_id: Number(m.id),
       competition_code: code,
       matchday: info.matchday,
       stage: info.stage,
       round_key: info.key,
       round_label: info.label,
-      home_team: m.homeTeam.shortName || m.homeTeam.name || 'TBD',
-      home_crest: m.homeTeam.crest || null,
-      away_team: m.awayTeam.shortName || m.awayTeam.name || 'TBD',
-      away_crest: m.awayTeam.crest || null,
-      utc_date: m.utcDate,
-      status: m.status,
-      home_score: result.home,
-      away_score: result.away,
-      home_ht: ht.home,
-      away_ht: ht.away,
+      home_team: homeTeam,
+      home_crest: `https://images.fotmob.com/image_resources/logo/teamlogo/${m.home.id}.png`,
+      away_team: awayTeam,
+      away_crest: `https://images.fotmob.com/image_resources/logo/teamlogo/${m.away.id}.png`,
+      utc_date: mDate.toISOString(),
+      status: mapFotmobStatus(m.status),
+      home_score: score.home,
+      away_score: score.away,
+      home_ht: null,
+      away_ht: null,
       home_lambda: lambdaHome,
       away_lambda: lambdaAway,
       markets_points: buildMarketsPoints(lambdaHome, lambdaAway)
@@ -1225,29 +1440,30 @@ async function syncCompetition(code) {
 
   await pool.query(
     `INSERT INTO matches (
-       external_id, competition_code, matchday, stage, round_key, round_label,
+       external_id, fotmob_id, competition_code, matchday, stage, round_key, round_label,
        home_team, home_crest, away_team, away_crest, utc_date, status,
        home_score, away_score, home_ht, away_ht, home_lambda, away_lambda, markets_points, updated_at
      )
-     SELECT x.external_id, x.competition_code, x.matchday, x.stage, x.round_key, x.round_label,
+     SELECT x.external_id, x.fotmob_id, x.competition_code, x.matchday, x.stage, x.round_key, x.round_label,
             x.home_team, x.home_crest, x.away_team, x.away_crest, x.utc_date, x.status,
             x.home_score, x.away_score, x.home_ht, x.away_ht, x.home_lambda, x.away_lambda, x.markets_points, NOW()
      FROM jsonb_to_recordset($1::jsonb) AS x(
-       external_id bigint, competition_code text, matchday int, stage text, round_key text, round_label text,
+       external_id bigint, fotmob_id bigint, competition_code text, matchday int, stage text, round_key text, round_label text,
        home_team text, home_crest text, away_team text, away_crest text, utc_date timestamptz, status text,
        home_score int, away_score int, home_ht int, away_ht int,
        home_lambda numeric, away_lambda numeric, markets_points jsonb
      )
      ON CONFLICT (external_id) DO UPDATE SET
+       fotmob_id = COALESCE(EXCLUDED.fotmob_id, matches.fotmob_id),
        competition_code = EXCLUDED.competition_code,
        matchday = EXCLUDED.matchday,
        stage = EXCLUDED.stage,
        round_key = EXCLUDED.round_key,
        round_label = EXCLUDED.round_label,
        home_team = EXCLUDED.home_team,
-       home_crest = EXCLUDED.home_crest,
+       home_crest = COALESCE(EXCLUDED.home_crest, matches.home_crest),
        away_team = EXCLUDED.away_team,
-       away_crest = EXCLUDED.away_crest,
+       away_crest = COALESCE(EXCLUDED.away_crest, matches.away_crest),
        utc_date = EXCLUDED.utc_date,
        status = CASE
          WHEN matches.points_calculated AND matches.utc_date < NOW() - INTERVAL '48 hours' THEN matches.status
@@ -1267,14 +1483,13 @@ async function syncCompetition(code) {
        home_ht = CASE
          WHEN matches.points_calculated AND matches.utc_date < NOW() - INTERVAL '48 hours' THEN matches.home_ht
          WHEN matches.points_calculated AND (EXCLUDED.status != 'FINISHED' OR EXCLUDED.home_score IS NULL OR EXCLUDED.away_score IS NULL) THEN matches.home_ht
-         ELSE EXCLUDED.home_ht
+         ELSE COALESCE(EXCLUDED.home_ht, matches.home_ht)
        END,
        away_ht = CASE
          WHEN matches.points_calculated AND matches.utc_date < NOW() - INTERVAL '48 hours' THEN matches.away_ht
          WHEN matches.points_calculated AND (EXCLUDED.status != 'FINISHED' OR EXCLUDED.home_score IS NULL OR EXCLUDED.away_score IS NULL) THEN matches.away_ht
-         ELSE EXCLUDED.away_ht
+         ELSE COALESCE(EXCLUDED.away_ht, matches.away_ht)
        END,
-       -- Freeze all settlement-related values after points have been awarded.
        home_lambda = CASE
          WHEN matches.points_calculated THEN matches.home_lambda
          WHEN EXCLUDED.status IN ('TIMED', 'SCHEDULED') THEN EXCLUDED.home_lambda
@@ -1297,7 +1512,7 @@ async function syncCompetition(code) {
     [JSON.stringify(rows)]
   );
 
-  console.log(`[Sync] ${code}: ${rows.length} matches (${finishedForModel.length} finished used for ratings)`);
+  console.log(`[Sync] ${code}: ${rows.length} matches from FotMob (${finishedForModel.length} finished used for ratings)`);
   return true;
 }
 
@@ -1699,9 +1914,8 @@ let syncing = false;
 let schemaEnsured = false;
 
 /**
- * Automatically ensures that the auto-correction tracking columns exist in PostgreSQL.
- * Runs idempotently on boot so deployments on Render or fresh databases never fail with
- * column "settled_home_score" does not exist.
+ * Automatically ensures that the auto-correction tracking columns and fotmob_id exist in PostgreSQL.
+ * Runs idempotently on boot so deployments on Render or fresh databases never fail.
  */
 async function ensureAutoCorrectionSchema() {
   if (schemaEnsured) return true;
@@ -1712,7 +1926,10 @@ async function ensureAutoCorrectionSchema() {
         ADD COLUMN IF NOT EXISTS settled_away_score INT,
         ADD COLUMN IF NOT EXISTS settled_home_ht INT,
         ADD COLUMN IF NOT EXISTS settled_away_ht INT,
-        ADD COLUMN IF NOT EXISTS last_corrected_at TIMESTAMPTZ;
+        ADD COLUMN IF NOT EXISTS last_corrected_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS fotmob_id BIGINT;
+
+      CREATE INDEX IF NOT EXISTS idx_matches_fotmob_id ON matches(fotmob_id);
 
       UPDATE matches
       SET settled_home_score = COALESCE(settled_home_score, home_score),
@@ -1722,7 +1939,7 @@ async function ensureAutoCorrectionSchema() {
       WHERE points_calculated = TRUE AND settled_home_score IS NULL;
     `);
     schemaEnsured = true;
-    console.log('[Database] Auto-correction columns verified.');
+    console.log('[Database] Auto-correction & FotMob columns verified.');
     return true;
   } catch (err) {
     console.error('[Database] Schema verification error:', err.message);
@@ -1730,22 +1947,39 @@ async function ensureAutoCorrectionSchema() {
   }
 }
 
+let lastFullSyncAt = 0;
+const FULL_SYNC_INTERVAL_MS = 30 * 60 * 1000; // Full 380-match fixture schedule sync every 30m
+
 async function syncAll() {
   if (syncing) return;
   syncing = true;
   try {
     await ensureAutoCorrectionSchema();
-    const syncCodes = COMPETITIONS.filter((code) => FOOTBALL_DATA_COMPETITIONS.has(code));
-    for (let i = 0; i < syncCodes.length; i++) {
-      if (i > 0) await sleep(SYNC_GAP_MS);
-      try {
-        const ok = await syncCompetition(syncCodes[i]);
-        if (!ok) break; // rate limited: stop this run
-      } catch (err) {
-        console.error(`[Sync] ${syncCodes[i]} failed:`, err.message);
+
+    // 1. Instant real-time live sync for today's active & finished matches (every minute)
+    await syncLiveMatches();
+
+    // 2. Full league fixtures & Poisson ratings sync: on boot and every 30 minutes
+    const now = Date.now();
+    const shouldRunFullSync = now - lastFullSyncAt >= FULL_SYNC_INTERVAL_MS;
+
+    if (shouldRunFullSync) {
+      const syncCodes = COMPETITIONS.filter((code) => FOTMOB_COMPETITION_IDS[code]);
+      for (const code of syncCodes) {
+        try {
+          await syncCompetition(code);
+          await sleep(250);
+        } catch (err) {
+          console.error(`[Sync] Full league sync failed for ${code}:`, err.message);
+        }
       }
+      lastFullSyncAt = Date.now();
     }
+
+    // 3. Reconcile any corrected scores
     await reconcileUnsettledCorrections();
+
+    // 4. Settle finished matches immediately and award points
     await settleFinishedMatches();
   } catch (err) {
     console.error('[Sync] Unexpected error:', err);
@@ -1762,8 +1996,8 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// Match/result sync: every 5 minutes by default (well under football-data.org 10 req/min limit).
-const SYNC_CRON = process.env.SYNC_CRON || '*/5 * * * *';
+// Match/result sync: every minute by default for real-time live updates and instant settlement.
+const SYNC_CRON = process.env.SYNC_CRON || '* * * * *';
 if (!cron.validate(SYNC_CRON)) {
   console.error(`[FATAL] Invalid SYNC_CRON expression: ${SYNC_CRON}`);
 } else {
