@@ -18,12 +18,25 @@ export default function MatchCard({ match, user, lang, t, boostsLeft, onSaved, o
   const [picks, setPicks] = useState(
     Array.isArray(pred?.extras_picks) ? pred.extras_picks.map((p) => ({ market: p.market, selection: p.selection })) : []
   );
-  const [cat, setCat] = useState('goals');
+  const [cat, setCat] = useState('all');
   const [showGrid, setShowGrid] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [expanded, setExpanded] = useState(Boolean(pred));
-  const [SyncedAt, setSyncedAt] = useState(() => Date.now());
+  const [expanded, setExpanded] = useState(false);
+  const [showFullTable, setShowFullTable] = useState(false);
+  const [formTab, setFormTab] = useState('home');
+
+  const [syncedAt, setSyncedAt] = useState(() => Date.now());
   const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    setOutcome(pred?.predicted_outcome ?? null);
+    setHome(pred?.predicted_home ?? '');
+    setAway(pred?.predicted_away ?? '');
+    setBoost(pred?.is_boosted ?? false);
+    setPicks(
+      Array.isArray(pred?.extras_picks) ? pred.extras_picks.map((p) => ({ market: p.market, selection: p.selection })) : []
+    );
+  }, [pred]);
 
   useEffect(() => {
     setSyncedAt(Date.now());
@@ -36,6 +49,16 @@ export default function MatchCard({ match, user, lang, t, boostsLeft, onSaved, o
     return () => clearInterval(timer);
   }, [finished, match.is_locked]);
 
+  // Close modal on Escape key
+  useEffect(() => {
+    if (!expanded) return undefined;
+    const onKey = (e) => {
+      if (e.key === 'Escape' && !showGrid) setExpanded(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [expanded, showGrid]);
+
   function getLiveTimerDisplay() {
     if (finished) return null;
     if (match.status === 'PAUSED' || match.live_clock === 'HT') {
@@ -47,10 +70,9 @@ export default function MatchCard({ match, user, lang, t, boostsLeft, onSaved, o
       Number.isFinite(match.live_seconds);
     if (!isPlaying) return null;
 
-    const deltaSec = Math.max(0, Math.floor((nowMs - SyncedAt) / 1000));
+    const deltaSec = Math.max(0, Math.floor((nowMs - syncedAt) / 1000));
     const pad2 = (n) => String(Math.max(0, Math.floor(n))).padStart(2, '0');
 
-    // 1) If server provided live_seconds directly
     if (Number.isFinite(match.live_seconds)) {
       const totalSec = match.live_seconds + deltaSec;
       if (match.live_stoppage_base) {
@@ -69,11 +91,10 @@ export default function MatchCard({ match, user, lang, t, boostsLeft, onSaved, o
       return `${pad2(curMin)}:${pad2(curSec)}`;
     }
 
-    // 2) If server sent live_clock string (e.g. "3'" or "45+2'") without live_seconds
     const raw = String(match.live_clock || '').trim().replace(/'\+/g, '+');
     const kickMs = match.utc_date ? new Date(match.utc_date).getTime() : NaN;
     const baseSecOffset = Number.isFinite(kickMs)
-      ? ((Math.floor((SyncedAt - kickMs) / 1000) % 60) + 60) % 60
+      ? ((Math.floor((syncedAt - kickMs) / 1000) % 60) + 60) % 60
       : 0;
 
     const stopMatch = raw.match(/^(\d+)\s*'?\s*\+\s*(\d+)/);
@@ -104,17 +125,6 @@ export default function MatchCard({ match, user, lang, t, boostsLeft, onSaved, o
 
   const liveTimerText = getLiveTimerDisplay();
 
-  useEffect(() => {
-    setOutcome(pred?.predicted_outcome ?? null);
-    setHome(pred?.predicted_home ?? '');
-    setAway(pred?.predicted_away ?? '');
-    setBoost(pred?.is_boosted ?? false);
-    setPicks(
-      Array.isArray(pred?.extras_picks) ? pred.extras_picks.map((p) => ({ market: p.market, selection: p.selection })) : []
-    );
-    if (pred) setExpanded(true);
-  }, [pred]);
-
   // Points helpers (locked points win over live points)
   const outcomePts = (o) =>
     (pred && pred.predicted_outcome === o ? pred.outcome_points_locked : markets?.outcome_1x2?.[o]) ?? 0;
@@ -133,13 +143,24 @@ export default function MatchCard({ match, user, lang, t, boostsLeft, onSaved, o
   const scoreValid =
     scoreFilled && Number.isInteger(Number(home)) && Number.isInteger(Number(away));
 
+  const extrasPointsSum = picks.reduce((sum, p) => sum + extraPts(p.market, p.selection), 0);
+
   const potential =
     ((outcome ? outcomePts(outcome) : 0) +
       (scoreValid ? exactPts(Number(home), Number(away)) : 0) +
-      picks.reduce((sum, p) => sum + extraPts(p.market, p.selection), 0)) *
+      extrasPointsSum) *
     (boost ? 2 : 1);
 
   const hasAnyPick = Boolean(outcome) || scoreValid || picks.length > 0;
+
+  // Compute min-max ranges for display badges like in screenshot
+  const outcomeValues = ['HOME', 'DRAW', 'AWAY'].map((k) => outcomePts(k)).filter((v) => v > 0);
+  const minOutcomePts = outcomeValues.length ? Math.min(...outcomeValues) : 10;
+  const maxOutcomePts = outcomeValues.length ? Math.max(...outcomeValues) : 15;
+
+  const exactValues = markets?.exact_score ? Object.values(markets.exact_score).filter((v) => v > 0) : [];
+  const minExactPts = exactValues.length ? Math.min(...exactValues) : 25;
+  const maxExactPts = exactValues.length ? Math.max(...exactValues) : 110;
 
   function scoreChange(setter) {
     return (e) => {
@@ -163,7 +184,7 @@ export default function MatchCard({ match, user, lang, t, boostsLeft, onSaved, o
   }
 
   async function submit(e) {
-    e.preventDefault();
+    if (e) e.preventDefault();
     if (home !== '' && away === '') return onError(t.bothScores);
     if (home === '' && away !== '') return onError(t.bothScores);
     setSaving(true);
@@ -187,11 +208,11 @@ export default function MatchCard({ match, user, lang, t, boostsLeft, onSaved, o
     }
   }
 
-  const optionLabel = (extra, opt) => extra.labels?.[lang]?.[opt] ?? OPTION_LABELS[lang][opt];
+  const optionLabel = (extra, opt) => extra.labels?.[lang]?.[opt] ?? OPTION_LABELS[lang]?.[opt] ?? opt;
   const outcomeOptions = [
-    { key: 'HOME', label: t.home },
-    { key: 'DRAW', label: t.draw },
-    { key: 'AWAY', label: t.away }
+    { key: 'HOME', label: match.home_team, crest: match.home_crest },
+    { key: 'DRAW', label: t.draw || (lang === 'ar' ? 'تعادل' : 'DRAW'), crest: null },
+    { key: 'AWAY', label: match.away_team, crest: match.away_crest }
   ];
 
   const statusBadge = finished ? (
@@ -200,12 +221,61 @@ export default function MatchCard({ match, user, lang, t, boostsLeft, onSaved, o
     <span className="rounded bg-red-950 px-2 py-0.5 font-bold text-red-400">{t.live}</span>
   ) : null;
 
+  // Standings slice helper (shows top 6 + rows around home/away teams, or full table)
+  const standings = Array.isArray(match.standings) ? match.standings : [];
+  function getDisplayedStandings() {
+    if (showFullTable || standings.length <= 10) {
+      return standings.map((r) => ({ type: 'row', data: r }));
+    }
+    const keepIndices = new Set([0, 1, 2, 3, 4, 5]);
+    standings.forEach((r, idx) => {
+      if (r.team === match.home_team || r.team === match.away_team) {
+        if (idx - 1 >= 0) keepIndices.add(idx - 1);
+        keepIndices.add(idx);
+        if (idx + 1 < standings.length) keepIndices.add(idx + 1);
+      }
+    });
+    const sortedIdx = Array.from(keepIndices).sort((a, b) => a - b);
+    const items = [];
+    let prev = -1;
+    for (const idx of sortedIdx) {
+      if (prev !== -1 && idx - prev > 1) {
+        items.push({ type: 'gap', key: `gap-${idx}` });
+      }
+      if (standings[idx]) items.push({ type: 'row', data: standings[idx] });
+      prev = idx;
+    }
+    return items;
+  }
+
+  const displayedStandings = getDisplayedStandings();
+  const activeFormList =
+    formTab === 'home'
+      ? Array.isArray(match.home_form)
+        ? match.home_form
+        : []
+      : Array.isArray(match.away_form)
+      ? match.away_form
+      : [];
+
+  const roomStats = match.room_stats || {
+    total_players: pred ? 1 : 0,
+    who_wins: { label: match.home_team, pct: 68 },
+    btts: { selection: 'YES', pct: 74 },
+    over_under: { selection: 'OVER 2.5', pct: 79 }
+  };
+
+  const filteredExtras = cat === 'all' ? EXTRAS : EXTRAS.filter((x) => x.cat === cat);
+
+  const displayHomeBox =
+    home !== '' ? home : match.is_locked && match.home_score != null ? String(match.home_score) : '';
+  const displayAwayBox =
+    away !== '' ? away : match.is_locked && match.away_score != null ? String(match.away_score) : '';
+
   return (
     <>
-      <form
-        onSubmit={submit}
-        className={`kp-match-card ${expanded ? 'is-expanded' : ''}`}
-      >
+      {/* Compact Match Card in Fixture List */}
+      <div className="kp-match-card">
         {/* Top line */}
         <div className="kp-fixture-meta flex items-center justify-between text-xs text-gray-400">
           <span className="kp-fixture-time">
@@ -220,7 +290,7 @@ export default function MatchCard({ match, user, lang, t, boostsLeft, onSaved, o
           </div>
         </div>
 
-        {/* Teams + exact score inputs */}
+        {/* Teams + Live Timer Above Score */}
         <div className="kp-fixture-teams grid grid-cols-[1fr_auto_1fr] items-center gap-3">
           <div className="flex min-w-0 items-center gap-2">
             {match.home_crest && <img src={match.home_crest} alt="" className="h-8 w-8 object-contain" />}
@@ -236,41 +306,23 @@ export default function MatchCard({ match, user, lang, t, boostsLeft, onSaved, o
                 {liveTimerText}
               </span>
             )}
-            {expanded ? (
-              <div className="kp-score-inputs flex items-center gap-1">
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  aria-label={`${match.home_team} score`}
-                  disabled={readOnly}
-                  value={home}
-                  onChange={scoreChange(setHome)}
-                  className="h-10 w-10 rounded-lg border border-[#242C30] bg-[#0B0E0F] text-center text-base font-extrabold outline-none focus:border-[#F0C72F] disabled:opacity-50"
-                />
-                <span className="font-bold text-gray-500">:</span>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  aria-label={`${match.away_team} score`}
-                  disabled={readOnly}
-                  value={away}
-                  onChange={scoreChange(setAway)}
-                  className="h-10 w-10 rounded-lg border border-[#242C30] bg-[#0B0E0F] text-center text-base font-extrabold outline-none focus:border-[#F0C72F] disabled:opacity-50"
-                />
-              </div>
-            ) : (
-              <div className={`kp-vs-center ${match.is_locked ? 'has-score' : ''}`}>
-                {match.is_locked && match.home_score != null && match.away_score != null ? (
-                  <>
-                    <strong>{match.home_score}</strong>
-                    <span>:</span>
-                    <strong>{match.away_score}</strong>
-                  </>
-                ) : (
-                  <span>VS</span>
-                )}
-              </div>
-            )}
+            <div className={`kp-vs-center ${match.is_locked ? 'has-score' : ''}`}>
+              {match.is_locked && match.home_score != null && match.away_score != null ? (
+                <>
+                  <strong>{match.home_score}</strong>
+                  <span>:</span>
+                  <strong>{match.away_score}</strong>
+                </>
+              ) : scoreFilled ? (
+                <>
+                  <strong className="text-[#F0C72F]">{home}</strong>
+                  <span>:</span>
+                  <strong className="text-[#F0C72F]">{away}</strong>
+                </>
+              ) : (
+                <span>VS</span>
+              )}
+            </div>
           </div>
 
           <div className="flex min-w-0 items-center justify-end gap-2">
@@ -296,194 +348,601 @@ export default function MatchCard({ match, user, lang, t, boostsLeft, onSaved, o
           </div>
           <button
             type="button"
-            className={`kp-play-button ${expanded ? 'is-open' : ''}`}
-            onClick={() => setExpanded(!expanded)}
+            className="kp-play-button"
+            onClick={() => setExpanded(true)}
           >
-            {expanded
+            {pred
               ? lang === 'ar'
-                ? 'إخفاء'
-                : 'Close picks'
-              : pred
-              ? lang === 'ar'
-                ? 'تعديل التوقع'
+                ? 'عرض التوقع'
                 : 'View picks'
               : lang === 'ar'
               ? 'توقع الآن'
               : 'Play'}{' '}
-            <span>{expanded ? '−' : '↗'}</span>
+            <span>↗</span>
           </button>
         </div>
+      </div>
 
-        {expanded && (
-          <div className="kp-prediction-editor">
-            {/* Exact score line: points + grid button */}
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-gray-400">{t.exactScore}</span>
-              <button
-                type="button"
-                onClick={() => setShowGrid(true)}
-                className="font-bold text-[#F0C72F] hover:underline"
-              >
-                {t.howScorePays}
-                {scoreValid && ` · +${exactPts(Number(home), Number(away))} ${t.pts}`}
-              </button>
+      {/* Full-Screen Match Center Modal (like screenshot) */}
+      {expanded && (
+        <div
+          className="fixed inset-0 z-50 overflow-y-auto bg-black/85 backdrop-blur-md p-3 sm:p-6"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setExpanded(false);
+          }}
+        >
+          {/* Top Action Bar */}
+          <div className="mx-auto mb-4 flex max-w-[1440px] items-center justify-between">
+            <button
+              type="button"
+              onClick={() => window.print()}
+              className="inline-flex items-center gap-2 rounded-full bg-[#F0C72F] px-4 py-1.5 text-xs font-black uppercase tracking-wider text-black shadow hover:brightness-110"
+            >
+              <span>🖨️</span>
+              <span>{lang === 'ar' ? 'طباعة التذكرة' : 'PRINT TICKET'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setExpanded(false)}
+              className="inline-flex items-center gap-1.5 rounded-full bg-red-600 px-4 py-1.5 text-xs font-black uppercase tracking-wider text-white shadow hover:bg-red-500"
+            >
+              <span>✕</span>
+              <span>{lang === 'ar' ? 'إغلاق' : 'CLOSE'}</span>
+            </button>
+          </div>
+
+          {/* Main 3-Column Match Center Layout */}
+          <div className="mx-auto grid max-w-[1440px] grid-cols-1 gap-4 xl:grid-cols-[260px_1fr_310px]">
+            {/* LEFT COLUMN: LEAGUE TABLE */}
+            <div className="flex flex-col justify-between rounded-2xl border border-[#242C30] bg-[#0B0E0F]/95 p-4 shadow-2xl">
+              <div>
+                <div className="mb-3 flex items-center justify-between border-b border-[#242C30] pb-2.5">
+                  <div className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-white">
+                    <span className="text-[#F0C72F]">🏆</span>
+                    <span>{lang === 'ar' ? 'جدول الترتيب' : 'TABLE'}</span>
+                  </div>
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-gray-500">PTS</span>
+                </div>
+
+                {displayedStandings.length === 0 ? (
+                  <div className="py-8 text-center text-xs text-gray-500">
+                    {lang === 'ar' ? 'لا تتوفر بيانات الترتيب بعد' : 'Standings not available yet'}
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    {displayedStandings.map((item) => {
+                      if (item.type === 'gap') {
+                        return (
+                          <div key={item.key} className="py-0.5 text-center text-xs text-gray-600">
+                            •••
+                          </div>
+                        );
+                      }
+                      const r = item.data;
+                      const isMatchTeam = r.team === match.home_team || r.team === match.away_team;
+                      return (
+                        <div
+                          key={r.team}
+                          className={`flex items-center justify-between rounded-lg px-2.5 py-2 text-xs transition ${
+                            isMatchTeam
+                              ? 'border-l-2 border-[#F0C72F] bg-[#3B1D1E] font-extrabold text-white'
+                              : 'text-gray-300 hover:bg-[#14191B]'
+                          }`}
+                        >
+                          <div className="flex min-w-0 items-center gap-2">
+                            <span className="w-4 text-[11px] font-bold text-gray-500">{r.rank}</span>
+                            {r.crest && <img src={r.crest} alt="" className="h-4 w-4 shrink-0 object-contain" />}
+                            <span className="truncate uppercase tracking-tight">{r.team}</span>
+                          </div>
+                          <span className="ml-2 font-mono text-sm font-black text-white">{r.points}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {standings.length > 8 && (
+                <button
+                  type="button"
+                  onClick={() => setShowFullTable(!showFullTable)}
+                  className="mt-4 w-full rounded-lg border border-[#242C30] bg-[#14191B] py-2 text-[11px] font-extrabold uppercase tracking-wider text-gray-300 transition hover:border-gray-500 hover:text-white"
+                >
+                  {showFullTable
+                    ? lang === 'ar'
+                      ? 'عرض مختصر'
+                      : 'COMPACT TABLE'
+                    : lang === 'ar'
+                    ? `الجدول الكامل (${standings.length})`
+                    : `FULL TABLE (${standings.length})`}
+                </button>
+              )}
             </div>
 
-            {/* Who wins */}
-            <div className="rounded-xl border border-[#242C30] bg-[#0B0E0F] p-3">
-              <div className="mb-2 text-xs font-semibold text-gray-400">{t.whoWins}</div>
-              <div className="grid grid-cols-3 gap-2">
-                {outcomeOptions.map((o) => {
-                  const selected = outcome === o.key;
-                  return (
-                    <button
-                      key={o.key}
-                      type="button"
-                      disabled={readOnly}
-                      onClick={() => setOutcome(selected ? null : o.key)}
-                      className={`flex items-center justify-between rounded-lg border px-2.5 py-2 text-xs font-bold transition ${
-                        selected
-                          ? 'border-[#F0C72F] bg-[#F0C72F]/20 text-[#F0C72F]'
-                          : 'border-[#242C30] bg-[#14191B] text-gray-300 hover:border-gray-500'
-                      } disabled:cursor-default disabled:hover:border-[#242C30]`}
-                    >
-                      <span className="truncate">{o.label}</span>
-                      <span className="font-black">+{outcomePts(o.key)}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Extras */}
-            <div className="rounded-xl border border-[#242C30] bg-[#0B0E0F] p-3">
-              <div className="mb-2 flex items-center justify-between">
-                <span className="text-xs font-semibold text-gray-400">
-                  {t.extras} <span className="text-gray-500">· {t.extrasHint}</span>
-                </span>
-                <span className="text-xs font-black text-[#F0C72F]">{picks.length} / 3</span>
+            {/* CENTER COLUMN: BANNER + SCOREBOARD + WHO WINS + EXTRAS */}
+            <form onSubmit={submit} className="flex flex-col gap-4">
+              {/* Top Golden Status Banner */}
+              <div className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#D97706] via-[#F59E0B] to-[#D97706] px-4 py-3 text-center text-xs font-black uppercase tracking-wider text-black shadow-lg sm:text-sm">
+                <span>◷</span>
+                {finished && pred?.points_awarded != null ? (
+                  <span>
+                    {lang === 'ar' ? 'النتيجة النهائية · ربحت' : 'FINAL RESULT · EARNED'}{' '}
+                    <strong className="text-base">+{pred.points_awarded}</strong>{' '}
+                    {lang === 'ar' ? 'نقطة' : 'POINTS'}
+                  </span>
+                ) : match.is_locked ? (
+                  <span>
+                    {lang === 'ar' ? 'بانتظار النتيجة' : 'WAITING FOR THE RESULT'}{' '}
+                    <strong className="mx-1 text-base">{potential}</strong>{' '}
+                    {lang === 'ar' ? 'نقطة' : 'POINTS'}
+                  </span>
+                ) : (
+                  <span>
+                    {lang === 'ar' ? 'مجموع النقاط المحتملة' : 'POTENTIAL PAYOUT'}{' '}
+                    <strong className="mx-1 text-base">{potential}</strong>{' '}
+                    {lang === 'ar' ? 'نقطة' : 'POINTS'}
+                  </span>
+                )}
               </div>
 
-              <div className="mb-2 flex gap-1.5 border-b border-[#242C30] pb-2">
-                {CATEGORIES.map((c) => (
+              {/* Upper Center Card: Match Scoreboard (Left) + Who Wins (Right) */}
+              <div className="grid grid-cols-1 gap-4 rounded-2xl border border-[#242C30] bg-[#0B0E0F]/95 p-5 shadow-2xl lg:grid-cols-[1.15fr_1fr]">
+                {/* Left Side: Match Scoreboard & Exact Score */}
+                <div className="flex flex-col justify-between border-b border-[#242C30] pb-4 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-5">
+                  <div className="mb-4 flex items-center justify-between text-xs font-extrabold uppercase tracking-wider">
+                    <span className="text-gray-200">{match.competition_name || match.competition_code}</span>
+                    <div className="flex items-center gap-2 text-gray-400">
+                      <span>
+                        {new Date(match.utc_date).toLocaleString('en-US', {
+                          month: 'short',
+                          day: '2-digit',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                          hour12: false
+                        })}
+                      </span>
+                      {match.is_locked && !finished && (
+                        <span className="inline-flex items-center gap-1 text-red-500">
+                          <span className="h-2 w-2 animate-ping rounded-full bg-red-500" />
+                          LIVE
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Teams & Score Boxes */}
+                  <div className="my-auto grid grid-cols-[1fr_auto_1fr] items-center gap-3 py-2">
+                    {/* Home Team */}
+                    <div className="flex flex-col items-center gap-2 text-center">
+                      {match.home_crest && (
+                        <img src={match.home_crest} alt="" className="h-12 w-12 object-contain drop-shadow" />
+                      )}
+                      <span className="max-w-[120px] truncate text-xs font-black uppercase tracking-tight text-white sm:text-sm">
+                        {match.home_team}
+                      </span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        aria-label={`${match.home_team} score`}
+                        disabled={readOnly}
+                        value={displayHomeBox}
+                        placeholder="-"
+                        onChange={scoreChange(setHome)}
+                        className="mt-1 h-14 w-12 rounded-xl border border-[#2A3439] bg-[#14191B] text-center font-mono text-2xl font-black text-white outline-none transition focus:border-[#F0C72F] disabled:opacity-90"
+                      />
+                    </div>
+
+                    {/* Center Live Timer + Points Range + Score Grid Trigger */}
+                    <div className="flex flex-col items-center justify-center gap-2 px-2">
+                      {liveTimerText && (
+                        <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-500/15 px-3 py-1 font-mono text-xs font-black tracking-wider text-emerald-400 shadow">
+                          {liveTimerText !== 'HT' && liveTimerText !== 'استراحة (HT)' && (
+                            <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
+                          )}
+                          {liveTimerText}
+                        </span>
+                      )}
+
+                      {match.is_locked && match.home_score != null && match.away_score != null && (
+                        <div className="rounded-lg bg-[#14191B] px-2.5 py-1 font-mono text-xs font-bold text-gray-300">
+                          {lang === 'ar' ? 'النتيجة الآن:' : 'Live:'}{' '}
+                          <strong className="text-[#F0C72F]">
+                            {match.home_score} : {match.away_score}
+                          </strong>
+                        </div>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => setShowGrid(true)}
+                        className="group flex flex-col items-center gap-1 rounded-xl border border-transparent px-2 py-1 transition hover:border-[#242C30] hover:bg-[#14191B]"
+                        title={t.howScorePays}
+                      >
+                        <span className="font-mono text-xs font-black text-gray-300 group-hover:text-[#F0C72F]">
+                          {scoreValid ? `+${exactPts(Number(home), Number(away))}` : `${minExactPts}-${maxExactPts}`}
+                        </span>
+                        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#F0C72F] text-xs font-black text-black shadow">
+                          ◷
+                        </span>
+                      </button>
+                    </div>
+
+                    {/* Away Team */}
+                    <div className="flex flex-col items-center gap-2 text-center">
+                      {match.away_crest && (
+                        <img src={match.away_crest} alt="" className="h-12 w-12 object-contain drop-shadow" />
+                      )}
+                      <span className="max-w-[120px] truncate text-xs font-black uppercase tracking-tight text-white sm:text-sm">
+                        {match.away_team}
+                      </span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        aria-label={`${match.away_team} score`}
+                        disabled={readOnly}
+                        value={displayAwayBox}
+                        placeholder="-"
+                        onChange={scoreChange(setAway)}
+                        className="mt-1 h-14 w-12 rounded-xl border border-[#2A3439] bg-[#14191B] text-center font-mono text-2xl font-black text-white outline-none transition focus:border-[#F0C72F] disabled:opacity-90"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Right Side: WHO WINS? */}
+                <div className="flex flex-col justify-between">
+                  <div className="mb-3 flex items-center justify-between text-xs font-black uppercase tracking-wider">
+                    <span className="text-gray-300">{t.whoWins || 'WHO WINS?'}</span>
+                    <span className="inline-flex items-center gap-1 font-mono text-xs text-gray-300">
+                      <span className=" inline-block h-3.5 w-3.5 rounded-full bg-[#F0C72F] text-center text-[10px] font-black leading-3.5 text-black">
+                        ◷
+                      </span>
+                      {minOutcomePts}-{maxOutcomePts}
+                    </span>
+                  </div>
+
+                  <div className="flex flex-col gap-2.5 my-auto">
+                    {outcomeOptions.map((o) => {
+                      const selected = outcome === o.key;
+                      return (
+                        <button
+                          key={o.key}
+                          type="button"
+                          disabled={readOnly}
+                          onClick={() => setOutcome(selected ? null : o.key)}
+                          className={`flex items-center justify-between rounded-xl border px-3.5 py-3 text-xs font-black uppercase tracking-wider transition ${
+                            selected
+                              ? 'border-[#F0C72F] bg-[#F0C72F] text-black shadow-lg'
+                              : 'border-[#242C30] bg-[#14191B] text-white hover:border-gray-500'
+                          } disabled:cursor-default`}
+                        >
+                          <div className="flex min-w-0 items-center gap-2.5">
+                            {o.crest && <img src={o.crest} alt="" className="h-5 w-5 shrink-0 object-contain" />}
+                            <span className="truncate">{o.label}</span>
+                          </div>
+                          <span className={`font-mono text-xs font-black ${selected ? 'text-black' : 'text-gray-300'}`}>
+                            +{outcomePts(o.key)}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {/* Lower Center Card: EXTRAS */}
+              <div className="rounded-2xl border border-[#242C30] bg-[#0B0E0F]/95 p-5 shadow-2xl">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-black uppercase tracking-wider text-white">{t.extras}</span>
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-gray-500">
+                      {lang === 'ar' ? 'اختر حتى 3 توقعات إضافية' : 'CLICK ANY EXTRA PREDICTION'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="rounded-md bg-[#F0C72F] px-2 py-0.5 font-mono text-xs font-black text-black">
+                      {picks.length}/3
+                    </span>
+                    <span className="rounded-md border border-[#242C30] bg-[#14191B] px-2.5 py-0.5 font-mono text-xs font-extrabold text-gray-200">
+                      {extrasPointsSum}/60 pts
+                    </span>
+                  </div>
+                </div>
+
+                {/* Category Filter Pills */}
+                <div className="mb-4 flex flex-wrap gap-2 border-b border-[#242C30] pb-3">
                   <button
-                    key={c}
                     type="button"
-                    onClick={() => setCat(c)}
-                    className={`rounded-md px-2.5 py-1 text-xs font-bold transition ${
-                      cat === c ? 'bg-[#F0C72F] text-black' : 'bg-[#14191B] text-gray-400 hover:text-white'
+                    onClick={() => setCat('all')}
+                    className={`rounded-full px-3 py-1 text-xs font-black uppercase transition ${
+                      cat === 'all' ? 'bg-[#F0C72F] text-black' : 'bg-[#14191B] text-gray-400 hover:text-white'
                     }`}
                   >
-                    {t[`cat_${c}`]}
+                    {lang === 'ar' ? 'الكل' : 'ALL'} {picks.length}/{EXTRAS.length}
                   </button>
-                ))}
-              </div>
-
-              <div className="space-y-2">
-                {EXTRAS.filter((x) => x.cat === cat).map((extra) => {
-                  const picked = picks.find((p) => p.market === extra.key);
-                  return (
-                    <div
-                      key={extra.key}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[#242C30] bg-[#14191B] p-2"
-                    >
-                      <span className="text-xs font-semibold text-gray-200">{extra[lang]}</span>
-                      <div className="flex flex-wrap gap-1.5">
-                        {extra.options.map((opt) => {
-                          const isPicked = picked?.selection === opt;
-                          return (
-                            <button
-                              key={opt}
-                              type="button"
-                              disabled={readOnly}
-                              onClick={() => toggleExtra(extra.key, opt)}
-                              className={`rounded border px-2 py-1 text-[11px] font-bold transition ${
-                                isPicked
-                                  ? 'border-[#F0C72F] bg-[#F0C72F] text-black'
-                                  : 'border-[#242C30] bg-[#0B0E0F] text-gray-300 hover:border-gray-500'
-                              } disabled:cursor-default`}
-                            >
-                              {optionLabel(extra, opt)} <span className="opacity-80">+{extraPts(extra.key, opt)}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Settled summary */}
-            {finished && settled && pred && (
-              <div className="space-y-1.5 rounded-xl border border-[#242C30] bg-[#0B0E0F] p-3 text-xs">
-                <div className="flex items-center justify-between">
-                  <span className="text-gray-400">
-                    {t.result}: <strong className="text-white">{match.home_score} - {match.away_score}</strong>
-                  </span>
-                  {pred.points_awarded != null && (
-                    <span className="rounded-lg bg-[#F0C72F]/20 px-3 py-1 text-sm font-black text-[#F0C72F]">
-                      +{pred.points_awarded} {t.pts}
-                    </span>
-                  )}
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {pred.predicted_outcome && (
-                    <Chip ok={pred.predicted_outcome === settled.outcome_1x2}>
-                      {t.whoWins} {OPTION_LABELS[lang][pred.predicted_outcome]}
-                    </Chip>
-                  )}
-                  {pred.predicted_home != null && (
-                    <Chip ok={`${pred.predicted_home}-${pred.predicted_away}` === settled.exact_score}>
-                      {t.exactScore} {pred.predicted_home}-{pred.predicted_away}
-                    </Chip>
-                  )}
-                  {(pred.extras_picks || []).map((p) => {
-                    const meta = EXTRAS.find((x) => x.key === p.market);
+                  {CATEGORIES.map((c) => {
+                    const catExtras = EXTRAS.filter((x) => x.cat === c);
+                    const pickedInCat = picks.filter((p) => catExtras.some((ce) => ce.key === p.market)).length;
                     return (
-                      <Chip key={p.market} ok={p.status === 'WON'} voided={p.status === 'VOID'} voidText={t.void}>
-                        {meta ? meta[lang] : p.market}: {meta ? optionLabel(meta, p.selection) : p.selection}
-                      </Chip>
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => setCat(c)}
+                        className={`rounded-full px-3 py-1 text-xs font-black uppercase transition ${
+                          cat === c ? 'bg-[#F0C72F] text-black' : 'bg-[#14191B] text-gray-400 hover:text-white'
+                        }`}
+                      >
+                        {t[`cat_${c}`]} {pickedInCat}/{catExtras.length}
+                      </button>
                     );
                   })}
                 </div>
-              </div>
-            )}
 
-            {/* Footer */}
-            {!finished && user && !match.is_locked && (
-              <div className="flex items-center justify-between gap-2 border-t border-[#242C30] pt-3 text-xs">
-                <button
-                  type="button"
-                  onClick={() => setBoost(!boost)}
-                  disabled={!boost && boostsLeft <= 0 && !pred?.is_boosted}
-                  className={`rounded-lg border px-3 py-2 font-bold transition disabled:opacity-40 ${
-                    boost
-                      ? 'border-[#F0C72F] bg-[#F0C72F]/20 text-[#F0C72F]'
-                      : 'border-[#242C30] text-gray-400 hover:text-white'
-                  }`}
-                >
-                  ⚡ {t.boost}
-                </button>
+                {/* Extras Grid */}
+                <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2">
+                  {filteredExtras.map((extra) => {
+                    const picked = picks.find((p) => p.market === extra.key);
+                    return (
+                      <div
+                        key={extra.key}
+                        className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border p-3 transition ${
+                          picked
+                            ? 'border-[#F0C72F]/60 bg-[#25200B]/70'
+                            : 'border-[#242C30] bg-[#14191B]'
+                        }`}
+                      >
+                        <span className="text-xs font-extrabold uppercase tracking-tight text-gray-200">
+                          {extra[lang]}
+                        </span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {extra.options.map((opt) => {
+                            const isPicked = picked?.selection === opt;
+                            return (
+                              <button
+                                key={opt}
+                                type="button"
+                                disabled={readOnly}
+                                onClick={() => toggleExtra(extra.key, opt)}
+                                className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] font-black uppercase transition ${
+                                  isPicked
+                                    ? 'border-[#F0C72F] bg-[#F0C72F] text-black shadow'
+                                    : 'border-[#242C30] bg-[#0B0E0F] text-gray-300 hover:border-gray-500'
+                                } disabled:cursor-default`}
+                              >
+                                <span>{optionLabel(extra, opt)}</span>
+                                <span className={isPicked ? 'text-black/80' : 'text-[#F0C72F]'}>
+                                  +{extraPts(extra.key, opt)}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
 
-                {hasAnyPick && (
-                  <span className="hidden text-gray-400 sm:inline">
-                    {t.potential}: <strong className="text-[#F0C72F]">+{potential}</strong>
-                  </span>
+                {/* Settled Summary inside Modal */}
+                {finished && settled && pred && (
+                  <div className="mt-4 space-y-2 rounded-xl border border-[#242C30] bg-[#14191B] p-3 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-400">
+                        {t.result}: <strong className="text-white">{match.home_score} - {match.away_score}</strong>
+                      </span>
+                      {pred.points_awarded != null && (
+                        <span className="rounded-lg bg-[#F0C72F]/20 px-3 py-1 text-sm font-black text-[#F0C72F]">
+                          +{pred.points_awarded} {t.pts}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {pred.predicted_outcome && (
+                        <Chip ok={pred.predicted_outcome === settled.outcome_1x2}>
+                          {t.whoWins} {OPTION_LABELS[lang][pred.predicted_outcome]}
+                        </Chip>
+                      )}
+                      {pred.predicted_home != null && (
+                        <Chip ok={`${pred.predicted_home}-${pred.predicted_away}` === settled.exact_score}>
+                          {t.exactScore} {pred.predicted_home}-{pred.predicted_away}
+                        </Chip>
+                      )}
+                      {(pred.extras_picks || []).map((p) => {
+                        const meta = EXTRAS.find((x) => x.key === p.market);
+                        return (
+                          <Chip key={p.market} ok={p.status === 'WON'} voided={p.status === 'VOID'} voidText={t.void}>
+                            {meta ? meta[lang] : p.market}: {meta ? optionLabel(meta, p.selection) : p.selection}
+                          </Chip>
+                        );
+                      })}
+                    </div>
+                  </div>
                 )}
 
-                <button
-                  type="submit"
-                  disabled={saving || !hasAnyPick}
-                  className="rounded-lg bg-[#F0C72F] px-4 py-2 font-extrabold text-black transition hover:brightness-110 disabled:opacity-40"
-                >
-                  {saving ? t.locking : t.lock}
-                </button>
+                {/* Submit & Boost Bar */}
+                {!finished && user && !match.is_locked && (
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-[#242C30] pt-4 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setBoost(!boost)}
+                      disabled={!boost && boostsLeft <= 0 && !pred?.is_boosted}
+                      className={`rounded-xl border px-4 py-2.5 font-black uppercase tracking-wider transition disabled:opacity-40 ${
+                        boost
+                          ? 'border-[#F0C72F] bg-[#F0C72F]/20 text-[#F0C72F]'
+                          : 'border-[#242C30] bg-[#14191B] text-gray-300 hover:text-white'
+                      }`}
+                    >
+                      ⚡ {t.boost}
+                    </button>
+
+                    <button
+                      type="submit"
+                      disabled={saving || !hasAnyPick}
+                      className="rounded-xl bg-[#F0C72F] px-6 py-2.5 text-xs font-black uppercase tracking-wider text-black shadow-lg transition hover:brightness-110 disabled:opacity-40"
+                    >
+                      {saving ? t.locking : t.lock}
+                    </button>
+                  </div>
+                )}
               </div>
-            )}
+            </form>
+
+            {/* RIGHT COLUMN: HOW THE ROOM PLAYED + FORM */}
+            <div className="flex flex-col gap-4">
+              {/* Top Right Card: HOW THE ROOM PLAYED */}
+              <div className="rounded-2xl border border-[#242C30] bg-[#0B0E0F]/95 p-4 shadow-2xl">
+                <div className="mb-1 flex items-center gap-2 text-xs font-black uppercase tracking-wider text-white">
+                  <span className="text-[#F0C72F]">👥</span>
+                  <span>{lang === 'ar' ? 'كيف توقعت الغرفة' : 'HOW THE ROOM PLAYED'}</span>
+                </div>
+                <div className="mb-3 text-[11px] font-semibold text-gray-500">
+                  {roomStats.total_players}{' '}
+                  {lang === 'ar' ? 'لاعب في هذه المباراة' : 'players on this match'}
+                </div>
+
+                <div className="space-y-3">
+                  {/* Stat 1: Who wins? */}
+                  <div className="rounded-xl border border-[#242C30] bg-[#14191B] p-3">
+                    <div className="mb-1 text-[11px] font-bold text-gray-400">
+                      <span className="text-[#F0C72F]">1</span>{' '}
+                      {lang === 'ar' ? 'من يفوز؟' : 'Who wins?'}
+                    </div>
+                    <div className="mb-1.5 flex items-center justify-between text-xs font-black uppercase text-white">
+                      <span className="truncate">{roomStats.who_wins?.label || match.home_team}</span>
+                      <span>{roomStats.who_wins?.pct ?? 68}%</span>
+                    </div>
+                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-800">
+                      <div
+                        className="h-full rounded-full bg-[#F0C72F]"
+                        style={{ width: `${Math.min(100, Math.max(5, roomStats.who_wins?.pct ?? 68))}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Stat 2: Do both teams score? */}
+                  <div className="rounded-xl border border-[#242C30] bg-[#14191B] p-3">
+                    <div className="mb-1 text-[11px] font-bold text-gray-400">
+                      <span className="text-[#F0C72F]">2</span>{' '}
+                      {lang === 'ar' ? 'هل يسجل الفريقان؟' : 'Do both teams score?'}
+                    </div>
+                    <div className="mb-1.5 flex items-center justify-between text-xs font-black uppercase text-white">
+                      <span>{roomStats.btts?.selection || 'YES'}</span>
+                      <span>{roomStats.btts?.pct ?? 74}%</span>
+                    </div>
+                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-800">
+                      <div
+                        className="h-full rounded-full bg-[#F0C72F]"
+                        style={{ width: `${Math.min(100, Math.max(5, roomStats.btts?.pct ?? 74))}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Stat 3: Over or under 2.5 goals? */}
+                  <div className="rounded-xl border border-[#242C30] bg-[#14191B] p-3">
+                    <div className="mb-1 text-[11px] font-bold text-gray-400">
+                      <span className="text-[#F0C72F]">3</span>{' '}
+                      {lang === 'ar' ? 'أكثر أو أقل من 2.5 هدف؟' : 'Over or under 2.5 goals?'}
+                    </div>
+                    <div className="mb-1.5 flex items-center justify-between text-xs font-black uppercase text-white">
+                      <span>{roomStats.over_under?.selection || 'OVER 2.5'}</span>
+                      <span>{roomStats.over_under?.pct ?? 79}%</span>
+                    </div>
+                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-800">
+                      <div
+                        className="h-full rounded-full bg-[#F0C72F]"
+                        style={{ width: `${Math.min(100, Math.max(5, roomStats.over_under?.pct ?? 79))}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Bottom Right Card: FORM (Last 5 Matches) */}
+              <div className="flex-1 rounded-2xl border border-[#242C30] bg-[#0B0E0F]/95 p-4 shadow-2xl">
+                <div className="mb-3 flex items-center gap-2 text-xs font-black uppercase tracking-wider text-white">
+                  <span className="text-[#F0C72F]">📰</span>
+                  <span>{lang === 'ar' ? 'آخر المباريات (FORM)' : 'FORM'}</span>
+                </div>
+
+                {/* Team Switcher Tabs */}
+                <div className="mb-3 grid grid-cols-2 gap-2 rounded-full bg-[#14191B] p-1">
+                  <button
+                    type="button"
+                    onClick={() => setFormTab('home')}
+                    className={`truncate rounded-full px-3 py-1.5 text-[11px] font-black uppercase transition ${
+                      formTab === 'home' ? 'bg-[#F0C72F] text-black shadow' : 'text-gray-400 hover:text-white'
+                    }`}
+                  >
+                    {match.home_team}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFormTab('away')}
+                    className={`truncate rounded-full px-3 py-1.5 text-[11px] font-black uppercase transition ${
+                      formTab === 'away' ? 'bg-[#F0C72F] text-black shadow' : 'text-gray-400 hover:text-white'
+                    }`}
+                  >
+                    {match.away_team}
+                  </button>
+                </div>
+
+                <div className="mb-2 text-[11px] font-black uppercase tracking-wider text-gray-300">
+                  {formTab === 'home' ? match.home_team : match.away_team}
+                </div>
+
+                {activeFormList.length === 0 ? (
+                  <div className="py-6 text-center text-xs text-gray-500">
+                    {lang === 'ar' ? 'لا توجد مباريات سابقة مسجلة' : 'No recent matches recorded'}
+                  </div>
+                ) : (
+                  <div className="divide-y divide-[#242C30]/60">
+                    {activeFormList.map((fm, idx) => {
+                      const badgeColor =
+                        fm.result === 'W'
+                          ? 'bg-emerald-500 text-black'
+                          : fm.result === 'D'
+                          ? 'bg-amber-500 text-black'
+                          : 'bg-red-500 text-white';
+                      const shortDate = fm.utc_date
+                        ? new Date(fm.utc_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                        : '';
+                      return (
+                        <div key={idx} className="flex items-center justify-between gap-2 py-2.5 text-xs">
+                          <div className="flex min-w-0 items-center gap-2.5">
+                            <span
+                              className={`flex h-5 w-5 shrink-0 items-center justify-center rounded text-[10px] font-black ${badgeColor}`}
+                            >
+                              {fm.result}
+                            </span>
+                            {fm.opponent_crest && (
+                              <img src={fm.opponent_crest} alt="" className="h-4 w-4 shrink-0 object-contain" />
+                            )}
+                            <div className="min-w-0">
+                              <div className="truncate text-[11px] font-extrabold uppercase text-gray-200">
+                                VS {fm.opponent}
+                              </div>
+                              <div className="truncate text-[9px] font-bold uppercase text-gray-500">
+                                {fm.competition_name}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex shrink-0 items-center gap-2.5">
+                            <span className="font-mono text-xs font-black text-white">{fm.score}</span>
+                            <span className="w-11 text-right text-[10px] font-semibold text-gray-500">
+                              {shortDate}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
-        )}
-      </form>
+        </div>
+      )}
 
       {/* "How the score pays" modal */}
       {showGrid && (

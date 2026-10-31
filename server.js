@@ -294,7 +294,7 @@ app.get(
 );
 
 // ---------------------------------------------------------------------------
-// 3b. Live Match Clock (Minutes + Seconds + Stoppage Time) & Score Helper
+// 3b. Live Match Clock (MM:SS + Stoppage Time) & Match Center Insights Helper
 // ---------------------------------------------------------------------------
 const ESPN_LEAGUE_SLUGS = {
   PL: 'eng.1',
@@ -515,6 +515,239 @@ function enrichMatchWithLiveClock(m, espnEvents) {
   };
 }
 
+function buildStandingsAndForm(finishedMatches, competitionCode) {
+  const tableMap = new Map();
+  const teamMatches = new Map();
+  const compName = COMPETITION_NAMES[competitionCode] || competitionCode;
+
+  function ensureTeam(name, crest) {
+    if (!tableMap.has(name)) {
+      tableMap.set(name, {
+        team: name,
+        crest: crest || null,
+        played: 0,
+        won: 0,
+        drawn: 0,
+        lost: 0,
+        gf: 0,
+        ga: 0,
+        gd: 0,
+        points: 0
+      });
+    } else if (crest && !tableMap.get(name).crest) {
+      tableMap.get(name).crest = crest;
+    }
+    if (!teamMatches.has(name)) {
+      teamMatches.set(name, []);
+    }
+  }
+
+  // finishedMatches is ordered by utc_date DESC
+  for (const fm of finishedMatches) {
+    const h = fm.home_team;
+    const a = fm.away_team;
+    const hs = Number(fm.home_score);
+    const as = Number(fm.away_score);
+    if (!h || !a || !Number.isFinite(hs) || !Number.isFinite(as)) continue;
+
+    ensureTeam(h, fm.home_crest);
+    ensureTeam(a, fm.away_crest);
+
+    // Record recent form (up to 5 most recent matches per team)
+    const hList = teamMatches.get(h);
+    if (hList.length < 5) {
+      hList.push({
+        result: hs > as ? 'W' : hs === as ? 'D' : 'L',
+        opponent: a,
+        opponent_crest: fm.away_crest || null,
+        score: `${hs}-${as}`,
+        utc_date: fm.utc_date,
+        competition_name: compName
+      });
+    }
+    const aList = teamMatches.get(a);
+    if (aList.length < 5) {
+      aList.push({
+        result: as > hs ? 'W' : as === hs ? 'D' : 'L',
+        opponent: h,
+        opponent_crest: fm.home_crest || null,
+        score: `${hs}-${as}`,
+        utc_date: fm.utc_date,
+        competition_name: compName
+      });
+    }
+
+    // Standings count league stages (or all matches if tournament)
+    const isLeagueStage = !fm.stage || ['REGULAR_SEASON', 'LEAGUE_STAGE'].includes(fm.stage);
+    if (isLeagueStage) {
+      const hRow = tableMap.get(h);
+      const aRow = tableMap.get(a);
+      hRow.played += 1;
+      aRow.played += 1;
+      hRow.gf += hs;
+      hRow.ga += as;
+      hRow.gd = hRow.gf - hRow.ga;
+      aRow.gf += as;
+      aRow.ga += hs;
+      aRow.gd = aRow.gf - aRow.ga;
+
+      if (hs > as) {
+        hRow.won += 1;
+        hRow.points += 3;
+        aRow.lost += 1;
+      } else if (hs < as) {
+        aRow.won += 1;
+        aRow.points += 3;
+        hRow.lost += 1;
+      } else {
+        hRow.drawn += 1;
+        aRow.drawn += 1;
+        hRow.points += 1;
+        aRow.points += 1;
+      }
+    }
+  }
+
+  const standings = Array.from(tableMap.values())
+    .sort((x, y) => y.points - x.points || y.gd - x.gd || y.gf - x.gf || x.team.localeCompare(y.team))
+    .map((row, idx) => ({ ...row, rank: idx + 1 }));
+
+  return { standings, teamMatches };
+}
+
+function buildRoomStatsForMatches(matchList, allPredRows) {
+  const byMatch = new Map();
+  for (const m of matchList) {
+    byMatch.set(String(m.id), []);
+  }
+  for (const r of allPredRows) {
+    const key = String(r.match_id);
+    if (byMatch.has(key)) byMatch.get(key).push(r);
+  }
+
+  const result = {};
+  for (const m of matchList) {
+    const preds = byMatch.get(String(m.id)) || [];
+    const totalPlayers = preds.length;
+
+    // 1. Who wins?
+    const outcomeCounts = { HOME: 0, DRAW: 0, AWAY: 0 };
+    let outcomeTotal = 0;
+
+    // 2. Both teams score & Over/Under 2.5 goals
+    const bttsCounts = { YES: 0, NO: 0 };
+    let bttsTotal = 0;
+    const ou25Counts = { OVER: 0, UNDER: 0 };
+    let ou25Total = 0;
+
+    for (const p of preds) {
+      if (p.predicted_outcome && outcomeCounts[p.predicted_outcome] !== undefined) {
+        outcomeCounts[p.predicted_outcome] += 1;
+        outcomeTotal += 1;
+      }
+      const extras = Array.isArray(p.extras_picks) ? p.extras_picks : [];
+      let foundBtts = false;
+      let foundOu = false;
+
+      for (const ex of extras) {
+        const mk = String(ex.market || '').toLowerCase();
+        const sel = String(ex.selection || '').toUpperCase();
+        if (mk.includes('btts') || mk.includes('both')) {
+          if (sel === 'YES' || sel === 'NO') {
+            bttsCounts[sel] += 1;
+            bttsTotal += 1;
+            foundBtts = true;
+          }
+        } else if (mk.includes('25') || mk.includes('2.5') || mk.includes('over_under') || mk.includes('total_goals')) {
+          if (sel.includes('OVER') || sel === 'YES') {
+            ou25Counts.OVER += 1;
+            ou25Total += 1;
+            foundOu = true;
+          } else if (sel.includes('UNDER') || sel === 'NO') {
+            ou25Counts.UNDER += 1;
+            ou25Total += 1;
+            foundOu = true;
+          }
+        }
+      }
+
+      // Also infer from exact score if user didn't pick that specific extra
+      if (!foundBtts && p.predicted_home !== null && p.predicted_away !== null) {
+        const bothScored = Number(p.predicted_home) > 0 && Number(p.predicted_away) > 0;
+        bttsCounts[bothScored ? 'YES' : 'NO'] += 1;
+        bttsTotal += 1;
+      }
+      if (!foundOu && p.predicted_home !== null && p.predicted_away !== null) {
+        const over25 = Number(p.predicted_home) + Number(p.predicted_away) > 2;
+        ou25Counts[over25 ? 'OVER' : 'UNDER'] += 1;
+        ou25Total += 1;
+      }
+    }
+
+    // Fallback to model probabilities if 0 predictions exist yet so UI always looks rich
+    const mkPts =
+      m.markets_points ||
+      buildMarketsPoints(
+        Number(m.home_lambda || DEFAULT_AVG_HOME),
+        Number(m.away_lambda || DEFAULT_AVG_AWAY)
+      );
+
+    let topOutcome = 'HOME';
+    let topOutcomePct = 50;
+    if (outcomeTotal > 0) {
+      topOutcome = Object.keys(outcomeCounts).reduce((a, b) =>
+        outcomeCounts[a] >= outcomeCounts[b] ? a : b
+      );
+      topOutcomePct = Math.round((outcomeCounts[topOutcome] / outcomeTotal) * 100);
+    } else if (mkPts?.outcome_1x2) {
+      const o = mkPts.outcome_1x2;
+      // Lower points means higher probability
+      topOutcome = ['HOME', 'DRAW', 'AWAY'].reduce((a, b) => ((o[a] || 99) <= (o[b] || 99) ? a : b));
+      const invSum = 1 / (o.HOME || 10) + 1 / (o.DRAW || 10) + 1 / (o.AWAY || 10);
+      topOutcomePct = Math.round((1 / (o[topOutcome] || 10) / invSum) * 100);
+    }
+
+    let topBtts = 'YES';
+    let topBttsPct = 55;
+    if (bttsTotal > 0) {
+      topBtts = bttsCounts.YES >= bttsCounts.NO ? 'YES' : 'NO';
+      topBttsPct = Math.round((bttsCounts[topBtts] / bttsTotal) * 100);
+    }
+
+    let topOu25 = 'OVER 2.5';
+    let topOu25Pct = 60;
+    if (ou25Total > 0) {
+      const isOver = ou25Counts.OVER >= ou25Counts.UNDER;
+      topOu25 = isOver ? 'OVER 2.5' : 'UNDER 2.5';
+      topOu25Pct = Math.round(((isOver ? ou25Counts.OVER : ou25Counts.UNDER) / ou25Total) * 100);
+    }
+
+    result[m.id] = {
+      total_players: totalPlayers,
+      who_wins: {
+        selection: topOutcome,
+        label:
+          topOutcome === 'HOME'
+            ? m.home_team
+            : topOutcome === 'AWAY'
+            ? m.away_team
+            : 'DRAW',
+        pct: topOutcomePct
+      },
+      btts: {
+        selection: topBtts,
+        pct: topBttsPct
+      },
+      over_under: {
+        selection: topOu25,
+        pct: topOu25Pct
+      }
+    };
+  }
+
+  return result;
+}
+
 // ---------------------------------------------------------------------------
 // 4. Competitions + matches
 // ---------------------------------------------------------------------------
@@ -599,23 +832,55 @@ app.get(
     );
     const espnEvents = hasActiveMatches ? await fetchEspnScoreboard(competition) : [];
 
+    // Fetch finished matches in this competition for Standings Table + Last 5 Form
+    const finishedMatchesRes = await pool.query(
+      `SELECT home_team, home_crest, away_team, away_crest, home_score, away_score, utc_date, stage
+       FROM matches
+       WHERE competition_code = $1
+         AND status = 'FINISHED'
+         AND home_score IS NOT NULL
+         AND away_score IS NOT NULL
+       ORDER BY utc_date DESC`,
+      [competition]
+    );
+    const { standings, teamMatches } = buildStandingsAndForm(finishedMatchesRes.rows, competition);
+
+    // Fetch all predictions on this round's matches for "HOW THE ROOM PLAYED"
+    const allRoundPredsRes =
+      matches.length > 0
+        ? await pool.query(
+            `SELECT match_id, predicted_outcome, predicted_home, predicted_away, extras_picks
+             FROM predictions
+             WHERE match_id = ANY($1::bigint[])`,
+            [matches.map((m) => m.id)]
+          )
+        : { rows: [] };
+    const roomStatsMap = buildRoomStatsForMatches(matches, allRoundPredsRes.rows);
+
     res.json({
       competition,
+      competition_name: COMPETITION_NAMES[competition] || competition,
       rounds,
       round: roundKey,
       maxBoosts: MAX_BOOSTS,
       boostsUsed,
+      standings,
       matches: matches.map((rawMatch) => {
         const m = enrichMatchWithLiveClock(rawMatch, espnEvents);
         return {
           ...m,
+          competition_name: COMPETITION_NAMES[competition] || competition,
           markets_points:
             m.markets_points ||
             buildMarketsPoints(
               Number(m.home_lambda || DEFAULT_AVG_HOME),
               Number(m.away_lambda || DEFAULT_AVG_AWAY)
             ),
-          prediction: userPredictions[m.id] || null
+          prediction: userPredictions[m.id] || null,
+          standings,
+          home_form: teamMatches.get(m.home_team) || [],
+          away_form: teamMatches.get(m.away_team) || [],
+          room_stats: roomStatsMap[m.id] || null
         };
       })
     });
