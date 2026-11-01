@@ -1,14 +1,14 @@
 import React, { useState } from 'react';
 
 const LEAGUE_LOGOS = {
-  PL: 'https://crests.football-data.org/PL.png',
-  PD: 'https://crests.football-data.org/PD.png',
-  BL1: 'https://crests.football-data.org/BL1.png',
-  SA: 'https://crests.football-data.org/SA.png',
-  FL1: 'https://crests.football-data.org/FL1.png',
-  CL: 'https://crests.football-data.org/CL.png',
-  TUN: 'https://imagecache.365scores.com/image/upload/f_png,w_120,h_120,c_limit,q_auto:good/v1/Competitions/554',
-  TU1: 'https://imagecache.365scores.com/image/upload/f_png,w_120,h_120,c_limit,q_auto:good/v1/Competitions/554'
+  PL: 'https://static.flashscore.com/res/image/data/rN76jpW1-naArgzhi.png',
+  PD: 'https://static.flashscore.com/res/image/data/QqMkp58j-reLEIqyt.png',
+  BL1: 'https://static.flashscore.com/res/image/data/OK1u7OEO-f1Humc6M.png',
+  SA: 'https://static.flashscore.com/res/image/data/MR5bDSiU-IJ2iYpX2.png',
+  FL1: 'https://static.flashscore.com/res/image/data/MsMVZaYI-MLhl2QvU.png',
+  CL: 'https://static.flashscore.com/res/image/data/fLD8FzTp-jVJ5lAat.png',
+  TUN: 'https://static.flashscore.com/res/image/data/YBrafEB7-j18GLkLE.png',
+  TU1: 'https://static.flashscore.com/res/image/data/YBrafEB7-j18GLkLE.png'
 };
 
 const LEAGUE_FALLBACK_ICONS = {

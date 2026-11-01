@@ -1044,9 +1044,6 @@ async function syncStandings(pool, compFilter = null) {
           if (!normName) continue;
 
           let crest = MASTER_CRESTS[normName] || crestMap.get(`${comp.code}:${normName}`) || null;
-          if (!crest && r.competitor?.id) {
-            crest = `https://imagecache.365scores.com/image/upload/f_png,w_64,h_64,c_limit,q_auto:eco,d_Competitors:default1.png/v1/Competitors/${r.competitor.id}`;
-          }
 
           await pool.query(
             `INSERT INTO standings (
