@@ -89,6 +89,8 @@ assert.strictEqual(formatTunisianTeam('Stade Tunisien'), 'الملعب التو�
 assert.strictEqual(formatTunisianTeam('Club Africain'), 'النادي الإفريقي');
 assert.strictEqual(formatTunisianTeam('Étoile du Sahel'), 'النجم الساحلي');
 assert.strictEqual(getFlashscoreCrest('logo.png'), 'https://static.flashscore.com/res/image/data/logo.png');
+assert.strictEqual(getFlashscoreCrest('AskYUH8k-COxgbCEm.png'), 'https://static.flashscore.com/res/image/data/WWpbDXxS-COxgbCEm.png');
+assert.strictEqual(getFlashscoreCrest('https://static.flashscore.com/res/image/data/AskYUH8k-COxgbCEm.png'), 'https://static.flashscore.com/res/image/data/WWpbDXxS-COxgbCEm.png');
 console.log('✓ Team names and crests verified');
 
 console.log('--- Testing Status and Score Mapping ---');

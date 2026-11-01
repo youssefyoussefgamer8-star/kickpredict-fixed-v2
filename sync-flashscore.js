@@ -60,9 +60,13 @@ function getFlashscoreCrest(logoFilename) {
   if (!logoFilename || typeof logoFilename !== 'string' || !logoFilename.trim()) {
     return null;
   }
-  const clean = logoFilename.trim();
+  let clean = logoFilename.trim();
   if (clean.startsWith('http://') || clean.startsWith('https://')) {
-    return clean;
+    return clean.replace(/\/([^\/\-]+)-([^\/]+)$/, '/WWpbDXxS-$2');
+  }
+  const parts = clean.split('-');
+  if (parts.length >= 2) {
+    clean = 'WWpbDXxS-' + parts.slice(1).join('-');
   }
   return `${FLASHSCORE_IMAGE_BASE}/${clean}`;
 }
@@ -841,7 +845,7 @@ async function smartLivePolling(
 }
 
 /**
- * Ensures required database columns exist for Flashscore sync.
+ * Ensures required database columns and tables exist for Flashscore and Standings sync.
  */
 async function ensureFlashscoreColumns(pool) {
   try {
@@ -853,9 +857,185 @@ async function ensureFlashscoreColumns(pool) {
         ADD COLUMN IF NOT EXISTS match_lineups JSONB;
 
       CREATE INDEX IF NOT EXISTS idx_matches_flashscore_id ON matches(flashscore_id);
+
+      CREATE TABLE IF NOT EXISTS standings (
+        competition_code VARCHAR(16) NOT NULL,
+        team_name VARCHAR(128) NOT NULL,
+        crest TEXT,
+        rank INTEGER NOT NULL,
+        played INTEGER NOT NULL DEFAULT 0,
+        won INTEGER NOT NULL DEFAULT 0,
+        drawn INTEGER NOT NULL DEFAULT 0,
+        lost INTEGER NOT NULL DEFAULT 0,
+        gf INTEGER NOT NULL DEFAULT 0,
+        ga INTEGER NOT NULL DEFAULT 0,
+        gd INTEGER NOT NULL DEFAULT 0,
+        points INTEGER NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY (competition_code, team_name)
+      );
+      CREATE INDEX IF NOT EXISTS idx_standings_comp_rank ON standings(competition_code, rank ASC);
     `);
   } catch (err) {
-    console.warn('[Flashscore] Column verification notice:', err.message);
+    console.warn('[Flashscore] Column/table verification notice:', err.message);
+  }
+}
+
+const STANDINGS_COMPS = [
+  { code: 'TUN', id: 554, langId: 27 },
+  { code: 'PL', id: 7, langId: 1 },
+  { code: 'PD', id: 11, langId: 1 },
+  { code: 'BL1', id: 25, langId: 1 },
+  { code: 'SA', id: 17, langId: 1 },
+  { code: 'FL1', id: 35, langId: 1 },
+  { code: 'CL', id: 572, langId: 1 }
+];
+
+const TUN_365_TO_CANONICAL = {
+  'اتحاد بن قردان': 'اتحاد بن قردان',
+  'الترجي': 'الترجي الرياضي',
+  'الاتحاد المنستيري': 'الاتحاد المنستيري',
+  'النادي الأفريقي': 'النادي الإفريقي',
+  'النادي الافريقي': 'النادي الإفريقي',
+  'التقدم الرياضي بساقية الداير': 'تقدم ساقية الدائر',
+  'البنزرتي': 'النادي البنزرتي',
+  'النادي البنزرتي': 'النادي البنزرتي',
+  'الملعب التونسي': 'الملعب التونسي',
+  'الشبيبة الرياضية بالعمران': 'شبيبة العمران',
+  'شبيبة العمران': 'شبيبة العمران',
+  'الصفاقسي': 'النادي الصفاقسي',
+  'النادي الصفاقسي': 'النادي الصفاقسي',
+  'النجم الساحلي': 'النجم الساحلي',
+  'مستقبل المرسى': 'مستقبل المرسى',
+  'الترجي الجرجيسي': 'الترجي الجرجيسي',
+  'النادي الرياضي لحمام الأنف': 'نادي حمام الأنف',
+  'نادي حمام الأنف': 'نادي حمام الأنف',
+  'الأولمبي الباجي': 'الأولمبي الباجي',
+  'النجم الرياضي بالمتلوي': 'نجم المتلوي',
+  'نجم المتلوي': 'نجم المتلوي',
+  'الأمل الرياضي بحمام سوسة': 'أمل حمام سوسة',
+  'مستقبل قابس': 'مستقبل قابس',
+  'قوافل قفصة': 'قوافل قفصة',
+  'مستقبل سليمان': 'مستقبل سليمان',
+  'اتحاد تطاوين': 'اتحاد تطاوين'
+};
+
+const GLOBAL_TEAM_ALIASES = {
+  'Manchester United': 'Manchester Utd',
+  'Newcastle United': 'Newcastle',
+  'Nottingham Forest': 'Nottingham',
+  'Leeds United': 'Leeds',
+  'Hull City': 'Hull',
+  'Leicester City': 'Leicester',
+  'Norwich City': 'Norwich',
+  'Wolverhampton': 'Wolves',
+  'Wolverhampton Wanderers': 'Wolves',
+  'West Ham United': 'West Ham',
+  'Sheffield United': 'Sheffield Utd',
+  'FC Barcelona': 'Barcelona',
+  'Atletico Madrid': 'Atl. Madrid',
+  'Real Betis': 'Betis',
+  'Athletic Bilbao': 'Ath Bilbao',
+  'Borussia Dortmund': 'Dortmund',
+  'FC Augsburg': 'Augsburg',
+  'Borussia Mönchengladbach': 'B. Monchengladbach',
+  'Inter Milan': 'Inter',
+  'OGC Nice': 'Nice',
+  'Olympique de Marseille': 'Marseille'
+};
+
+function normalizeStandingsTeam(rawName, compCode) {
+  if (!rawName) return '';
+  const trimmed = rawName.trim();
+  if (compCode === 'TUN') {
+    return TUN_365_TO_CANONICAL[trimmed] || formatTunisianTeam(trimmed);
+  }
+  return GLOBAL_TEAM_ALIASES[trimmed] || trimmed;
+}
+
+/**
+ * Synchronizes official standings for supported competitions from 365Scores.
+ */
+async function syncStandings(pool, compFilter = null) {
+  if (!pool) return;
+  const targetComps = compFilter
+    ? STANDINGS_COMPS.filter((c) => c.code === compFilter.toUpperCase())
+    : STANDINGS_COMPS;
+
+  if (targetComps.length === 0) return;
+
+  try {
+    const { rows: teamCrestRows } = await pool.query(
+      `SELECT competition_code, home_team as team, home_crest as crest FROM matches WHERE home_crest IS NOT NULL
+       UNION
+       SELECT competition_code, away_team as team, away_crest as crest FROM matches WHERE away_crest IS NOT NULL`
+    );
+    const crestMap = new Map();
+    for (const r of teamCrestRows) {
+      crestMap.set(`${r.competition_code}:${r.team}`, r.crest);
+    }
+
+    for (const comp of targetComps) {
+      try {
+        const url = `https://webws.365scores.com/web/standings/?appTypeId=5&langId=${comp.langId}&competitions=${comp.id}`;
+        const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+        if (!res.ok) {
+          console.warn(`[Standings] HTTP ${res.status} for ${comp.code}`);
+          continue;
+        }
+        const data = await res.json();
+        const rows = data.standings?.[0]?.rows || [];
+        if (rows.length === 0) continue;
+
+        for (const r of rows) {
+          const rawName = r.competitor?.name;
+          const normName = normalizeStandingsTeam(rawName, comp.code);
+          if (!normName) continue;
+
+          let crest = crestMap.get(`${comp.code}:${normName}`) || null;
+          if (!crest && r.competitor?.id) {
+            crest = `https://imagecache.365scores.com/image/upload/f_png,w_64,h_64,c_limit,q_auto:eco,d_Competitors:default1.png/v1/Competitors/${r.competitor.id}`;
+          }
+
+          await pool.query(
+            `INSERT INTO standings (
+              competition_code, team_name, crest, rank, played, won, drawn, lost, gf, ga, gd, points, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
+            ON CONFLICT (competition_code, team_name) DO UPDATE SET
+              crest = COALESCE(EXCLUDED.crest, standings.crest),
+              rank = EXCLUDED.rank,
+              played = EXCLUDED.played,
+              won = EXCLUDED.won,
+              drawn = EXCLUDED.drawn,
+              lost = EXCLUDED.lost,
+              gf = EXCLUDED.gf,
+              ga = EXCLUDED.ga,
+              gd = EXCLUDED.gd,
+              points = EXCLUDED.points,
+              updated_at = NOW()`,
+            [
+              comp.code,
+              normName,
+              crest,
+              r.position || 0,
+              r.gamePlayed || 0,
+              r.gamesWon || 0,
+              r.gamesEven || 0,
+              r.gamesLost || 0,
+              r.for || 0,
+              r.against || 0,
+              r.ratio || 0,
+              r.points || 0
+            ]
+          );
+        }
+        console.log(`[Standings] Synced ${rows.length} teams for ${comp.code}.`);
+      } catch (cErr) {
+        console.warn(`[Standings] Notice syncing ${comp.code}:`, cErr.message);
+      }
+    }
+  } catch (err) {
+    console.warn('[Standings] Sync notice:', err.message);
   }
 }
 
@@ -873,6 +1053,7 @@ function initFlashscoreSync({ pool, cron, settleFinishedMatches, reconcileScoreC
     try {
       await ensureFlashscoreColumns(pool);
       await syncFlashscoreSchedule(pool, { startDay: -1, endDay: 7 });
+      await syncStandings(pool);
     } catch (err) {
       console.error('[Flashscore] On-Boot fetch error:', err.message);
     }
@@ -883,9 +1064,11 @@ function initFlashscoreSync({ pool, cron, settleFinishedMatches, reconcileScoreC
     '0 0 * * *',
     () => {
       console.log('[Flashscore] Midnight Cron Job triggered: refreshing 9-day fixtures schedule (-1 to +7 days) for all leagues...');
-      syncFlashscoreSchedule(pool, { startDay: -1, endDay: 7 }).catch((err) => {
-        console.error('[Flashscore] Midnight Cron error:', err.message);
-      });
+      syncFlashscoreSchedule(pool, { startDay: -1, endDay: 7 })
+        .then(() => syncStandings(pool))
+        .catch((err) => {
+          console.error('[Flashscore] Midnight Cron error:', err.message);
+        });
     },
     { timezone: 'Africa/Tunis' }
   );
@@ -903,6 +1086,7 @@ function initFlashscoreSync({ pool, cron, settleFinishedMatches, reconcileScoreC
 module.exports = {
   initFlashscoreSync,
   syncFlashscoreSchedule,
+  syncStandings,
   smartLivePolling,
   fetchFlashscoreFeed,
   parseFlashscoreFeed,

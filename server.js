@@ -871,6 +871,15 @@ app.get(
     );
     const espnEvents = hasActiveMatches ? await fetchEspnScoreboard(competition) : [];
 
+    // Fetch official standings from standings table first
+    const standingsRes = await pool.query(
+      `SELECT team_name as team, crest, rank, played, won, drawn, lost, gf, ga, gd, points
+       FROM standings
+       WHERE competition_code = $1
+       ORDER BY rank ASC`,
+      [competition]
+    );
+
     // Fetch finished matches in this competition for Standings Table + Last 5 Form
     const finishedMatchesRes = await pool.query(
       `SELECT home_team, home_crest, away_team, away_crest, home_score, away_score, utc_date, stage
@@ -882,7 +891,8 @@ app.get(
        ORDER BY utc_date DESC`,
       [competition]
     );
-    const { standings, teamMatches } = buildStandingsAndForm(finishedMatchesRes.rows, competition);
+    const { standings: fallbackStandings, teamMatches } = buildStandingsAndForm(finishedMatchesRes.rows, competition);
+    const standings = standingsRes.rows.length > 0 ? standingsRes.rows : fallbackStandings;
 
     // Fetch all predictions on this round's matches for "HOW THE ROOM PLAYED"
     const allRoundPredsRes =
@@ -922,6 +932,31 @@ app.get(
           room_stats: roomStatsMap[m.id] || null
         };
       })
+    });
+  })
+);
+
+app.get(
+  '/api/standings',
+  asyncHandler(async (req, res) => {
+    res.set({
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+      'Surrogate-Control': 'no-store'
+    });
+    const competition = (req.query.competition || 'TUN').toUpperCase();
+    const { rows } = await pool.query(
+      `SELECT team_name as team, crest, rank, played, won, drawn, lost, gf, ga, gd, points
+       FROM standings
+       WHERE competition_code = $1
+       ORDER BY rank ASC`,
+      [competition]
+    );
+    res.json({
+      competition,
+      competition_name: COMPETITION_NAMES[competition] || competition,
+      standings: rows
     });
   })
 );
