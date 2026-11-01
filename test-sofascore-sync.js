@@ -91,8 +91,8 @@ console.log('✓ All Round Info extraction tests passed');
 console.log('--- Testing URL Path Sanitization (Double-Slash Prevention) ---');
 assert.strictEqual(sanitizePath('/unique-tournament/984/seasons'), 'unique-tournament/984/seasons');
 assert.strictEqual(sanitizePath('//api/v1/unique-tournament//984/seasons//'), 'unique-tournament/984/seasons');
-assert.strictEqual(sanitizePath('/tournaments/get-last-matches'), 'tournaments/get-last-matches');
-assert.strictEqual(sanitizePath('tournaments/get-events'), 'tournaments/get-events');
+assert.strictEqual(sanitizePath('/tournaments/get-events'), 'tournaments/get-events');
+assert.strictEqual(sanitizePath('//tournaments/get-events//'), 'tournaments/get-events');
 assert.strictEqual(sanitizePath('///'), '');
 console.log('✓ Path sanitization handles leading, trailing, and duplicate slashes cleanly');
 
@@ -330,16 +330,18 @@ console.log('--- Testing Aggregated Smart Polling for Concurrent Matches ---');
 
     // Verify candidate lists
     const lastCandidates = getRapidApiCandidateEndpoints('last');
-    assert.ok(lastCandidates.includes('tournaments/get-last-matches'));
+    assert.strictEqual(lastCandidates[0], 'tournaments/get-events', 'Primary candidate must be /tournaments/get-events');
     assert.ok(lastCandidates.includes('tournaments/get-events'));
     assert.ok(!lastCandidates.includes('nativePassThrough'), 'Must not contain nativePassThrough');
+    assert.ok(!lastCandidates.includes('tournaments/get-last-matches'), 'Must not contain guessed legacy paths');
 
     const nextCandidates = getRapidApiCandidateEndpoints('next');
-    assert.ok(nextCandidates.includes('tournaments/get-next-matches'));
+    assert.strictEqual(nextCandidates[0], 'tournaments/get-events', 'Primary candidate must be /tournaments/get-events');
     assert.ok(!nextCandidates.includes('nativePassThrough'), 'Must not contain nativePassThrough');
+    assert.ok(!nextCandidates.includes('tournaments/get-next-matches'), 'Must not contain guessed legacy paths');
 
-    // Simulate fallback: first candidate (tournaments/get-last-matches) returns 404,
-    // second candidate (tournaments/get-events) returns 200 with match events
+    // Simulate candidate fallback: candidate 1 (tournaments/get-events with tournamentId) returns 404,
+    // candidate 2 (tournaments/get-events with uniqueTournamentId) returns 200 with match events
     const calledUrls = [];
     const calledOptionsList = [];
 
@@ -348,14 +350,14 @@ console.log('--- Testing Aggregated Smart Polling for Concurrent Matches ---');
       calledOptionsList.push(options);
 
       const parsedUrl = new URL(url);
-      if (parsedUrl.pathname === '/tournaments/get-last-matches') {
+      if (parsedUrl.pathname === '/tournaments/get-events' && parsedUrl.searchParams.has('tournamentId')) {
         return {
           ok: false,
           status: 404,
           statusText: 'Not Found'
         };
       }
-      if (parsedUrl.pathname === '/tournaments/get-events') {
+      if (parsedUrl.pathname === '/tournaments/get-events' && parsedUrl.searchParams.has('uniqueTournamentId')) {
         return {
           ok: true,
           status: 200,
@@ -399,14 +401,14 @@ console.log('--- Testing Aggregated Smart Polling for Concurrent Matches ---');
 
     const url1 = new URL(calledUrls[0]);
     assert.strictEqual(url1.hostname, 'sofascore-api6.p.rapidapi.com');
-    assert.strictEqual(url1.pathname, '/tournaments/get-last-matches');
+    assert.strictEqual(url1.pathname, '/tournaments/get-events');
     assert.strictEqual(url1.searchParams.get('tournamentId'), '984');
     assert.strictEqual(url1.searchParams.get('seasonId'), '65427');
 
     const url2 = new URL(calledUrls[1]);
     assert.strictEqual(url2.hostname, 'sofascore-api6.p.rapidapi.com');
     assert.strictEqual(url2.pathname, '/tournaments/get-events');
-    assert.strictEqual(url2.searchParams.get('tournamentId'), '984');
+    assert.strictEqual(url2.searchParams.get('uniqueTournamentId'), '984');
     assert.strictEqual(url2.searchParams.get('seasonId'), '65427');
 
     // Verify RapidAPI headers
