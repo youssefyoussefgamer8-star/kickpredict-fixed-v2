@@ -1,6 +1,7 @@
 'use strict';
 const assert = require('node:assert/strict');
 
+process.env.ENABLE_ODDS_API = 'true';
 process.env.ODDS_PROVIDER = 'the-odds-api';
 process.env.THE_ODDS_API_KEY = 'unit-test-key';
 process.env.ODDS_WINDOW_DAYS = '7';

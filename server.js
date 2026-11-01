@@ -122,7 +122,7 @@ function authCookieOptions() {
   return {
     httpOnly: true,
     secure: isProduction,
-    sameSite: isProduction ? 'none' : 'lax',
+    sameSite: 'lax',
     path: '/'
   };
 }
@@ -848,12 +848,14 @@ app.get(
       );
       for (const p of predRes.rows) userPredictions[p.match_id] = p;
 
-      const boostRes = await pool.query(
-        `SELECT boosts_used FROM user_round_boosts
-         WHERE user_id = $1 AND competition_code = $2 AND round_key = $3`,
-        [req.user.id, competition, roundKey]
-      );
-      boostsUsed = boostRes.rows[0]?.boosts_used || 0;
+      if (MAX_BOOSTS > 0) {
+        const boostRes = await pool.query(
+          `SELECT boosts_used FROM user_round_boosts
+           WHERE user_id = $1 AND competition_code = $2 AND round_key = $3`,
+          [req.user.id, competition, roundKey]
+        );
+        boostsUsed = boostRes.rows[0]?.boosts_used || 0;
+      }
     }
 
     const hasActiveMatches = matches.some(
@@ -1073,53 +1075,81 @@ app.post(
           Number(match.away_lambda || DEFAULT_AVG_AWAY)
         );
 
-      // Lock the points as they are right now
-      const outcomePointsLocked = outcome ? markets.outcome_1x2[outcome] : 0;
-      const exactPointsLocked = h !== null ? markets.exact_score[`${h}-${a}`] : 0;
+      if (!markets || typeof markets !== 'object') {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: 'Match market pricing data is unavailable. Please try again shortly.' });
+      }
+
+      // Validate required market keys before locking points
+      if (outcome && (typeof markets.outcome_1x2?.[outcome] !== 'number' || isNaN(markets.outcome_1x2[outcome]))) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: `Market pricing for outcome "${outcome}" is missing. Please try again shortly.` });
+      }
+
+      const scoreKey = `${h}-${a}`;
+      if (h !== null && (typeof markets.exact_score?.[scoreKey] !== 'number' || isNaN(markets.exact_score[scoreKey]))) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: `Market pricing for score "${scoreKey}" is missing. Please try again shortly.` });
+      }
+
+      for (const pick of rawExtras) {
+        const extraPts = markets.extras?.[pick.market]?.[pick.selection];
+        if (typeof extraPts !== 'number' || isNaN(extraPts)) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({ error: `Market pricing for extra "${pick.market} - ${pick.selection}" is missing. Please try again shortly.` });
+        }
+      }
+
+      // Lock the points with safe fallbacks
+      const outcomePointsLocked = outcome ? (markets.outcome_1x2?.[outcome] ?? 0) : 0;
+      const exactPointsLocked = h !== null ? (markets.exact_score?.[scoreKey] ?? 0) : 0;
       const lockedExtras = rawExtras.map((pick) => ({
         market: pick.market,
         selection: pick.selection,
-        points_locked: markets.extras[pick.market][pick.selection]
+        points_locked: markets.extras?.[pick.market]?.[pick.selection] ?? 0
       }));
 
-      // Atomic x2 boost reservation per user / competition / round
-      await client.query(
-        `INSERT INTO user_round_boosts (user_id, competition_code, round_key, boosts_used)
-         VALUES ($1, $2, $3, 0)
-         ON CONFLICT (user_id, competition_code, round_key) DO NOTHING`,
-        [req.user.id, match.competition_code, match.round_key]
-      );
+      // Atomic x2 boost reservation per user / competition / round (optimized to skip if boosts disabled)
+      let boostsUsed = 0;
+      if (MAX_BOOSTS > 0 && wantBoost) {
+        await client.query(
+          `INSERT INTO user_round_boosts (user_id, competition_code, round_key, boosts_used)
+           VALUES ($1, $2, $3, 0)
+           ON CONFLICT (user_id, competition_code, round_key) DO NOTHING`,
+          [req.user.id, match.competition_code, match.round_key]
+        );
 
-      const boostRow = await client.query(
-        `SELECT boosts_used FROM user_round_boosts
-         WHERE user_id = $1 AND competition_code = $2 AND round_key = $3
-         FOR UPDATE`,
-        [req.user.id, match.competition_code, match.round_key]
-      );
+        const boostRow = await client.query(
+          `SELECT boosts_used FROM user_round_boosts
+           WHERE user_id = $1 AND competition_code = $2 AND round_key = $3
+           FOR UPDATE`,
+          [req.user.id, match.competition_code, match.round_key]
+        );
 
-      const existing = await client.query(
-        `SELECT is_boosted FROM predictions WHERE user_id = $1 AND match_id = $2 FOR UPDATE`,
-        [req.user.id, match.id]
-      );
+        const existing = await client.query(
+          `SELECT is_boosted FROM predictions WHERE user_id = $1 AND match_id = $2 FOR UPDATE`,
+          [req.user.id, match.id]
+        );
 
-      const wasBoosted = existing.rows[0]?.is_boosted || false;
-      let boostsUsed = boostRow.rows[0].boosts_used;
+        const wasBoosted = existing.rows[0]?.is_boosted || false;
+        boostsUsed = boostRow.rows[0]?.boosts_used || 0;
 
-      if (!wasBoosted && wantBoost) {
-        if (boostsUsed >= MAX_BOOSTS) {
-          await client.query('ROLLBACK');
-          return res.status(400).json({ error: `You already used your ${MAX_BOOSTS} x2 boost(s) in this round.` });
+        if (!wasBoosted && wantBoost) {
+          if (boostsUsed >= MAX_BOOSTS) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ error: `You already used your ${MAX_BOOSTS} x2 boost(s) in this round.` });
+          }
+          boostsUsed += 1;
+        } else if (wasBoosted && !wantBoost) {
+          boostsUsed = Math.max(0, boostsUsed - 1);
         }
-        boostsUsed += 1;
-      } else if (wasBoosted && !wantBoost) {
-        boostsUsed = Math.max(0, boostsUsed - 1);
-      }
 
-      await client.query(
-        `UPDATE user_round_boosts SET boosts_used = $1
-         WHERE user_id = $2 AND competition_code = $3 AND round_key = $4`,
-        [boostsUsed, req.user.id, match.competition_code, match.round_key]
-      );
+        await client.query(
+          `UPDATE user_round_boosts SET boosts_used = $1
+           WHERE user_id = $2 AND competition_code = $3 AND round_key = $4`,
+          [boostsUsed, req.user.id, match.competition_code, match.round_key]
+        );
+      }
 
       const upsert = await client.query(
         `INSERT INTO predictions (
@@ -1636,8 +1666,9 @@ app.use((err, _req, res, _next) => {
 
 // Odds have their own conservative schedule so they don't consume quota every
 // time match data is refreshed. They are optional and disabled without a key.
+const enableOddsApi = process.env.ENABLE_ODDS_API === 'true';
 const ODDS_CRON = process.env.ODDS_CRON || oddsProvider.DEFAULT_CRON;
-if (oddsProvider.isEnabled()) {
+if (enableOddsApi && oddsProvider.isEnabled()) {
   if (!cron.validate(ODDS_CRON)) {
     console.error(`[Odds] Invalid ODDS_CRON expression: ${ODDS_CRON}`);
   } else {
@@ -1653,7 +1684,7 @@ if (oddsProvider.isEnabled()) {
     console.log(`[Odds] Provider ${oddsProvider.PROVIDER} scheduled with cron: ${ODDS_CRON}`);
   }
 } else {
-  console.log('[Odds] Disabled (no configured odds API key).');
+  console.log('[Odds] Disabled (ENABLE_ODDS_API is false or no API key configured). Daily quota protected.');
 }
 
 const server = app.listen(PORT, async () => {

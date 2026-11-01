@@ -10,7 +10,7 @@ const competitions = (process.env.COMPETITION_CODES || process.env.COMPETITION_C
 
 (async () => {
   if (!odds.isEnabled()) {
-    console.log('No odds API key found in .env (THE_ODDS_API_KEY).');
+    console.log('Odds API is disabled (ENABLE_ODDS_API is false or no API key found in .env).');
     return;
   }
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });

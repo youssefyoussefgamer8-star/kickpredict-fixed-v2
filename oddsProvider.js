@@ -26,6 +26,9 @@ const PROVIDER = (
 const DEFAULT_CRON = '10 6 * * *'; // once a day: pre-match odds don't move enough to justify more, and it protects the free quota
 
 function isEnabled() {
+  if (process.env.ENABLE_ODDS_API !== 'true') {
+    return false;
+  }
   const key = PROVIDER === 'the-odds-api' ? process.env.THE_ODDS_API_KEY : process.env.API_FOOTBALL_KEY;
   return Boolean(key && key.trim());
 }
