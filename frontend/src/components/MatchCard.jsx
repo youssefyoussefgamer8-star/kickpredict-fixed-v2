@@ -3,6 +3,7 @@ import { api } from '../utils/api';
 import { EXTRAS, CATEGORIES, OPTION_LABELS } from '../constants/gameData';
 import Chip from './Chip';
 import ScoreGridModal from './ScoreGridModal';
+import MatchDetailsModal from './MatchDetailsModal';
 
 export default function MatchCard({ match, user, lang, t, onSaved, onError }) {
   const pred = match.prediction;
@@ -23,6 +24,7 @@ export default function MatchCard({ match, user, lang, t, onSaved, onError }) {
   const [expanded, setExpanded] = useState(false);
   const [showFullTable, setShowFullTable] = useState(false);
   const [formTab, setFormTab] = useState('home');
+  const [showDetails, setShowDetails] = useState(false);
 
   const [syncedAt, setSyncedAt] = useState(() => Date.now());
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -293,7 +295,10 @@ export default function MatchCard({ match, user, lang, t, onSaved, onError }) {
   return (
     <>
       {/* Compact Match Card in Responsive Grid */}
-      <div className="kp-match-card group relative flex flex-col justify-between rounded-xl border border-[#2a2a2a] bg-[#1a1a1a] p-4 sm:p-5 shadow-lg transition-all duration-200 hover:-translate-y-1 hover:border-[#53FC18]/50 hover:shadow-2xl hover:shadow-black/60">
+      <div
+        onClick={() => setShowDetails(true)}
+        className="kp-match-card group relative flex flex-col justify-between rounded-xl border border-[#2a2a2a] bg-[#1a1a1a] p-4 sm:p-5 shadow-lg transition-all duration-200 hover:-translate-y-1 hover:border-[#53FC18]/50 hover:shadow-2xl hover:shadow-black/60 cursor-pointer"
+      >
         {/* Top Meta Line: Time & Status Badges */}
         <div className="flex items-center justify-between text-[11px] font-semibold text-gray-400 pb-2 border-b border-white/5">
           <div className="flex items-center gap-1.5 truncate">
@@ -384,7 +389,7 @@ export default function MatchCard({ match, user, lang, t, onSaved, onError }) {
 
         {/* Card Footer: Match Status & Modern Action Button */}
         <div className="mt-3 pt-3 border-t border-white/5 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 flex-wrap">
             {finished ? (
               <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-white/5 text-gray-400 border border-white/5">
                 {lang === 'ar' ? 'انتهت' : 'FT'}
@@ -399,11 +404,28 @@ export default function MatchCard({ match, user, lang, t, onSaved, onError }) {
                 {lang === 'ar' ? 'متاح للتوقع' : 'OPEN'}
               </span>
             )}
+
+            {/* Direct Match Details Pill Button */}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowDetails(true);
+              }}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-extrabold text-gray-300 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 transition active:scale-95"
+              title={lang === 'ar' ? 'عرض تفاصيل المباراة والتشكيلات' : 'View match details and lineups'}
+            >
+              <span>📊</span>
+              <span>{lang === 'ar' ? 'التفاصيل' : 'Details'}</span>
+            </button>
           </div>
 
           <button
             type="button"
-            onClick={() => setExpanded(true)}
+            onClick={(e) => {
+              e.stopPropagation();
+              setExpanded(true);
+            }}
             className={`inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all duration-150 active:scale-95 shadow-md ${
               pred
                 ? 'bg-[#152417] text-[#53FC18] border border-[#53FC18]/40 hover:bg-[#53FC18] hover:text-black hover:shadow-[#53FC18]/20'
@@ -425,15 +447,26 @@ export default function MatchCard({ match, user, lang, t, onSaved, onError }) {
           }}
         >
           {/* Top Action Bar */}
-          <div className="mx-auto mb-4 flex max-w-[1440px] items-center justify-between">
-            <button
-              type="button"
-              onClick={() => window.print()}
-              className="inline-flex items-center gap-2 rounded-full bg-[#F0C72F] px-4 py-1.5 text-xs font-black uppercase tracking-wider text-black shadow hover:brightness-110"
-            >
-              <span>🖨️</span>
-              <span>{lang === 'ar' ? 'طباعة التذكرة' : 'PRINT TICKET'}</span>
-            </button>
+          <div className="mx-auto mb-4 flex max-w-[1440px] items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="inline-flex items-center gap-2 rounded-full bg-[#F0C72F] px-4 py-1.5 text-xs font-black uppercase tracking-wider text-black shadow hover:brightness-110"
+              >
+                <span>🖨️</span>
+                <span>{lang === 'ar' ? 'طباعة التذكرة' : 'PRINT TICKET'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowDetails(true)}
+                className="inline-flex items-center gap-1.5 rounded-full bg-emerald-600/90 px-4 py-1.5 text-xs font-black uppercase tracking-wider text-white shadow hover:bg-emerald-500"
+              >
+                <span>📊</span>
+                <span>{lang === 'ar' ? 'الإحصائيات والتشكيلات' : 'STATS & LINEUPS'}</span>
+              </button>
+            </div>
 
             <button
               type="button"
@@ -1000,6 +1033,21 @@ export default function MatchCard({ match, user, lang, t, onSaved, onError }) {
             setShowGrid(false);
           }}
           onClose={() => setShowGrid(false)}
+        />
+      )}
+
+      {/* Match Details Modal (Stats & Lineups) */}
+      {showDetails && (
+        <MatchDetailsModal
+          match={match}
+          lang={lang}
+          t={t}
+          liveTimerText={liveTimerText}
+          onClose={() => setShowDetails(false)}
+          onOpenPrediction={() => {
+            setShowDetails(false);
+            setExpanded(true);
+          }}
         />
       )}
     </>
