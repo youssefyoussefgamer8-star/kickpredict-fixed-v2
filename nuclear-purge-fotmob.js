@@ -50,9 +50,9 @@ async function nuclearPurgeFotmob() {
     `);
     console.log(`[Nuclear Purge] Cleaned ${boostRes.rowCount} orphaned user boosts.`);
 
-    // 4. Force on-demand fetch of the 4-day window from Flashscore to populate the clean schedule
-    console.log('[Nuclear Purge] Fetching fresh 4-day schedule (today + 3 days) from Flashscore across all competitions...');
-    const fixtures = await syncFlashscoreSchedule(pool, { daysCount: 4 });
+    // 4. Force on-demand fetch of the 9-day window (-1 to +7) from Flashscore to populate the clean schedule
+    console.log('[Nuclear Purge] Fetching fresh 9-day schedule (-1 to +7 days) from Flashscore across all competitions...');
+    const fixtures = await syncFlashscoreSchedule(pool, { startDay: -1, endDay: 7 });
     console.log(`[Nuclear Purge] Retrieved and upserted ${fixtures.length} clean Flashscore fixtures into PostgreSQL.`);
 
     // 5. Query and display the fresh database state

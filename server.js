@@ -787,6 +787,12 @@ app.get(
   '/api/matches',
   optionalAuth,
   asyncHandler(async (req, res) => {
+    res.set({
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+      'Surrogate-Control': 'no-store'
+    });
     const competition = String(req.query.competition || COMPETITIONS[0]).toUpperCase();
     if (!COMPETITIONS.includes(competition)) {
       return res.status(400).json({ error: 'Unknown competition.' });
@@ -923,6 +929,12 @@ app.get(
 app.get(
   '/api/matches/:id/details',
   asyncHandler(async (req, res) => {
+    res.set({
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+      'Surrogate-Control': 'no-store'
+    });
     const matchId = Number(req.params.id);
     if (!Number.isSafeInteger(matchId)) {
       return res.status(400).json({ error: 'Invalid match id.' });

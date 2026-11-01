@@ -103,7 +103,9 @@ const TUNISIA_TEAMS_AR = {
   'as gabes': 'مستقبل قابس',
   'gabes': 'مستقبل قابس',
   'cs hammam-lif': 'نادي حمام الأنف',
-  'hammam-lif': 'نادي حمام الأنف'
+  'hammam-lif': 'نادي حمام الأنف',
+  'ps sakiet eddaier': 'تقدم ساقية الدائر',
+  'sakiet eddaier': 'تقدم ساقية الدائر'
 };
 
 /**
@@ -276,19 +278,29 @@ function mapFlashscoreStatus(match) {
 
   const ab = String(match.AB ?? '').trim();
   const ac = String(match.AC ?? '').trim();
+  const matchType = String(match.type ?? '').toLowerCase();
+  const ep = String(match.EP ?? '').toLowerCase();
 
-  // Cancelled checks
-  if (ac === '12' || ac === '13' || ac === '30' || match.type === 'canceled') {
+  // Cancelled / Abandoned checks
+  if (
+    ac === '12' || ac === '13' || ac === '30' ||
+    matchType === 'canceled' || matchType === 'cancelled' ||
+    ep.includes('cancel')
+  ) {
     return 'CANCELLED';
   }
 
-  // Postponed checks
-  if (ab === '4' || ac === '11' || ac === '10' || match.type === 'postponed') {
+  // Postponed / Rescheduled / Delayed / Interrupted checks
+  if (
+    ab === '4' || ac === '10' || ac === '11' || ac === '14' || ac === '15' || ac === '16' || ac === '43' ||
+    matchType === 'postponed' ||
+    ep.includes('postp') || ep.includes('delay') || ep.includes('interrup')
+  ) {
     return 'POSTPONED';
   }
 
   // Halftime / Paused checks
-  if (ac === '17' || ac === '18' || ac === '19' || match.code === 7 || match.type === 'paused') {
+  if (ac === '17' || ac === '18' || ac === '19' || match.code === 7 || matchType === 'paused' || ep.includes('half')) {
     return 'PAUSED';
   }
 
@@ -303,8 +315,8 @@ function mapFlashscoreStatus(match) {
     case '4':
       return 'POSTPONED';
     default:
-      if (ac === '3' || match.code === 100 || match.type === 'finished') return 'FINISHED';
-      if (ac === '1' || ac === '2' || match.type === 'inprogress') return 'IN_PLAY';
+      if (ac === '3' || match.code === 100 || matchType === 'finished') return 'FINISHED';
+      if (ac === '1' || ac === '2' || matchType === 'inprogress') return 'IN_PLAY';
       return 'SCHEDULED';
   }
 }
@@ -498,18 +510,21 @@ let scheduledFixturesCache = [];
  * On-Boot Fetch & Midnight Cron Job:
  * 1. Called immediately when server starts (On-Boot).
  * 2. Called every midnight at 00:00 (Africa/Tunis time).
- * 3. Fetches 4-day window (today + 3 days) for all competitions (PL, PD, BL1, SA, FL1, CL, TUN).
+ * 3. Fetches 9-day window (yesterday -1 through +7 days ahead) for all competitions (PL, PD, BL1, SA, FL1, CL, TUN).
  * 4. Calculates Poisson probability points and saves fixtures in PostgreSQL.
- * 5. Makes NO further network calls until next midnight or until live match window.
+ * 5. Handles scheduled, live, finished, postponed, and rescheduled matches gracefully.
  */
-async function syncFlashscoreSchedule(pool, { fetcher = fetch, daysCount = 4 } = {}) {
-  console.log(`[Flashscore Universal Sync] Fetching 4-day fixtures schedule (today + 3 days) for all competitions...`);
+async function syncFlashscoreSchedule(pool, { fetcher = fetch, startDay = -1, endDay = 7, daysCount } = {}) {
+  const actualStart = startDay !== undefined ? startDay : -1;
+  const actualEnd = endDay !== undefined ? endDay : (daysCount !== undefined ? daysCount - 1 : 7);
+  const totalDays = actualEnd - actualStart + 1;
+  console.log(`[Flashscore Universal Sync] Fetching ${totalDays}-day fixtures schedule (${actualStart} to +${actualEnd}) for all competitions...`);
 
   try {
     const allMatchesMap = new Map();
 
-    // Fetch daily feeds for 4 consecutive days (0, 1, 2, 3)
-    for (let dayOffset = 0; dayOffset < daysCount; dayOffset++) {
+    // Fetch daily feeds for window (default: -1 yesterday to +7 days ahead = 9 days)
+    for (let dayOffset = actualStart; dayOffset <= actualEnd; dayOffset++) {
       try {
         const feedText = await fetchFlashscoreFeed(`f_1_${dayOffset}_2_en_1`, { fetcher });
         const tournaments = parseFlashscoreFeed(feedText);
@@ -525,12 +540,12 @@ async function syncFlashscoreSchedule(pool, { fetcher = fetch, daysCount = 4 } =
           }
         }
       } catch (err) {
-        console.warn(`[Flashscore Universal Sync] Failed fetching day offset +${dayOffset}:`, err.message);
+        console.warn(`[Flashscore Universal Sync] Failed fetching day offset ${dayOffset}:`, err.message);
       }
     }
 
     const matchesList = Array.from(allMatchesMap.values());
-    console.log(`[Flashscore Universal Sync] Discovered ${matchesList.length} fixtures across ${daysCount} days.`);
+    console.log(`[Flashscore Universal Sync] Discovered ${matchesList.length} fixtures across ${totalDays} days.`);
 
     // Build Poisson expected ratings from finished matches per competition
     const finishedByComp = {};
@@ -846,7 +861,7 @@ async function ensureFlashscoreColumns(pool) {
 
 /**
  * Initializes the unified Universal Flashscore Sync provider for ALL competitions:
- * 1. Immediate On-Boot Fetch of 4-day fixtures schedule.
+ * 1. Immediate On-Boot Fetch of 9-day fixtures schedule (-1 to +7 days).
  * 2. Midnight Cron Job (00:00 Africa/Tunis time) daily.
  * 3. Smart Live Polling every 2 minutes with local database gate.
  */
@@ -857,7 +872,7 @@ function initFlashscoreSync({ pool, cron, settleFinishedMatches, reconcileScoreC
   (async () => {
     try {
       await ensureFlashscoreColumns(pool);
-      await syncFlashscoreSchedule(pool);
+      await syncFlashscoreSchedule(pool, { startDay: -1, endDay: 7 });
     } catch (err) {
       console.error('[Flashscore] On-Boot fetch error:', err.message);
     }
@@ -867,8 +882,8 @@ function initFlashscoreSync({ pool, cron, settleFinishedMatches, reconcileScoreC
   cron.schedule(
     '0 0 * * *',
     () => {
-      console.log('[Flashscore] Midnight Cron Job triggered: refreshing 4-day fixtures schedule for all leagues...');
-      syncFlashscoreSchedule(pool).catch((err) => {
+      console.log('[Flashscore] Midnight Cron Job triggered: refreshing 9-day fixtures schedule (-1 to +7 days) for all leagues...');
+      syncFlashscoreSchedule(pool, { startDay: -1, endDay: 7 }).catch((err) => {
         console.error('[Flashscore] Midnight Cron error:', err.message);
       });
     },
