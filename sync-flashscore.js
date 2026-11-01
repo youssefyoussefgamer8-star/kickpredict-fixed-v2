@@ -2,6 +2,7 @@
 require('dotenv').config();
 const { Pool } = require('pg');
 const { teamRatings, matchLambdas, buildMatchMarketsPoints } = require('./pricingEngine');
+const { MASTER_CRESTS } = require('./team-crests-master');
 
 // Flashscore Raw Feed Endpoints & Config
 const FLASHSCORE_BASE_URL = 'https://local-global.flashscore.ninja/2/x/feed';
@@ -54,19 +55,19 @@ function bigIntToFlashscoreId(num) {
 }
 
 /**
- * Maps Flashscore team logos to public CDN URLs.
+ * Maps Flashscore team logos to verified public CDN URLs.
+ * Resolves authentic crests from MASTER_CRESTS dictionary first.
  */
-function getFlashscoreCrest(logoFilename) {
+function getFlashscoreCrest(logoFilename, teamName) {
+  if (teamName && MASTER_CRESTS[teamName]) {
+    return MASTER_CRESTS[teamName];
+  }
   if (!logoFilename || typeof logoFilename !== 'string' || !logoFilename.trim()) {
     return null;
   }
-  let clean = logoFilename.trim();
+  const clean = logoFilename.trim();
   if (clean.startsWith('http://') || clean.startsWith('https://')) {
-    return clean.replace(/\/([^\/\-]+)-([^\/]+)$/, '/WWpbDXxS-$2');
-  }
-  const parts = clean.split('-');
-  if (parts.length >= 2) {
-    clean = 'WWpbDXxS-' + parts.slice(1).join('-');
+    return clean;
   }
   return `${FLASHSCORE_IMAGE_BASE}/${clean}`;
 }
@@ -285,7 +286,16 @@ function mapFlashscoreStatus(match) {
   const matchType = String(match.type ?? '').toLowerCase();
   const ep = String(match.EP ?? '').toLowerCase();
 
-  // Cancelled / Abandoned checks
+  // 1. Postponed checks (only when explicitly marked postponed or delayed)
+  if (
+    ab === '4' ||
+    matchType === 'postponed' ||
+    ep.includes('postp')
+  ) {
+    return 'POSTPONED';
+  }
+
+  // 2. Cancelled / Abandoned checks
   if (
     ac === '12' || ac === '13' || ac === '30' ||
     matchType === 'canceled' || matchType === 'cancelled' ||
@@ -294,35 +304,43 @@ function mapFlashscoreStatus(match) {
     return 'CANCELLED';
   }
 
-  // Postponed / Rescheduled / Delayed / Interrupted checks
+  // 3. Finished checks (including after extra time / penalties / full time)
   if (
-    ab === '4' || ac === '10' || ac === '11' || ac === '14' || ac === '15' || ac === '16' || ac === '43' ||
-    matchType === 'postponed' ||
-    ep.includes('postp') || ep.includes('delay') || ep.includes('interrup')
+    ab === '3' ||
+    ac === '3' ||
+    ac === '10' || // After Extra Time
+    ac === '11' || // After Penalties
+    matchType === 'finished' ||
+    match.code === 100 ||
+    ep.includes('finish') ||
+    ep.includes('aet') ||
+    ep.includes('ap') ||
+    ep.includes('pen') ||
+    ep === 'ft'
   ) {
-    return 'POSTPONED';
+    return 'FINISHED';
   }
 
-  // Halftime / Paused checks
+  // 4. Primary status by AB
+  if (ab === '1') {
+    return 'SCHEDULED';
+  }
+
+  if (ab === '2') {
+    return ac === '17' ? 'PAUSED' : 'IN_PLAY';
+  }
+
+  // 5. Halftime / Paused checks
   if (ac === '17' || ac === '18' || ac === '19' || match.code === 7 || matchType === 'paused' || ep.includes('half')) {
     return 'PAUSED';
   }
 
-  // Primary status
-  switch (ab) {
-    case '1':
-      return 'SCHEDULED';
-    case '2':
-      return ac === '17' ? 'PAUSED' : 'IN_PLAY';
-    case '3':
-      return 'FINISHED';
-    case '4':
-      return 'POSTPONED';
-    default:
-      if (ac === '3' || match.code === 100 || matchType === 'finished') return 'FINISHED';
-      if (ac === '1' || ac === '2' || matchType === 'inprogress') return 'IN_PLAY';
-      return 'SCHEDULED';
+  // 6. Live / In-play checks
+  if (ac === '1' || ac === '2' || matchType === 'inprogress') {
+    return 'IN_PLAY';
   }
+
+  return 'SCHEDULED';
 }
 
 /**
@@ -518,7 +536,7 @@ let scheduledFixturesCache = [];
  * 4. Calculates Poisson probability points and saves fixtures in PostgreSQL.
  * 5. Handles scheduled, live, finished, postponed, and rescheduled matches gracefully.
  */
-async function syncFlashscoreSchedule(pool, { fetcher = fetch, startDay = -1, endDay = 7, daysCount } = {}) {
+async function syncFlashscoreSchedule(pool, { fetcher = fetch, startDay = -1, endDay = 7, daysCount, settleFinishedMatches } = {}) {
   const actualStart = startDay !== undefined ? startDay : -1;
   const actualEnd = endDay !== undefined ? endDay : (daysCount !== undefined ? daysCount - 1 : 7);
   const totalDays = actualEnd - actualStart + 1;
@@ -598,8 +616,8 @@ async function syncFlashscoreSchedule(pool, { fetcher = fetch, startDay = -1, en
 
       const homeTeam = isTunisia ? formatTunisianTeam(m.AE) : m.AE.trim();
       const awayTeam = isTunisia ? formatTunisianTeam(m.AF) : m.AF.trim();
-      const homeCrest = getFlashscoreCrest(m.OA);
-      const awayCrest = getFlashscoreCrest(m.OB);
+      const homeCrest = getFlashscoreCrest(m.OA, homeTeam);
+      const awayCrest = getFlashscoreCrest(m.OB, awayTeam);
       const status = mapFlashscoreStatus(m);
       const scores = parseFlashscoreScore(m, status);
       const round = roundInfoFromFlashscore(m);
@@ -700,6 +718,15 @@ async function syncFlashscoreSchedule(pool, { fetcher = fetch, startDay = -1, en
     console.log(
       `[Flashscore Universal Sync] Sync complete: stored ${updatedCount} fixtures in PostgreSQL. Idling until live match window.`
     );
+
+    if (typeof settleFinishedMatches === 'function') {
+      try {
+        await settleFinishedMatches();
+      } catch (settleErr) {
+        console.error('[Flashscore Universal Sync] Settlement error after schedule sync:', settleErr.message);
+      }
+    }
+
     return matchesList;
   } catch (err) {
     console.error('[Flashscore Universal Sync] Schedule sync error:', err.message);
@@ -741,8 +768,15 @@ async function smartLivePolling(
        ORDER BY utc_date ASC`
     );
 
-    // If NO matches are live, skip completely with ZERO external network requests!
+    // If NO matches are live, ensure pending settlements are processed, then skip external network requests
     if (activeMatches.length === 0) {
+      if (typeof settleFinishedMatches === 'function') {
+        try {
+          await settleFinishedMatches();
+        } catch (settleErr) {
+          console.error('[Flashscore Live Polling] Settlement error during idle gate check:', settleErr.message);
+        }
+      }
       return;
     }
 
@@ -992,7 +1026,7 @@ async function syncStandings(pool, compFilter = null) {
           const normName = normalizeStandingsTeam(rawName, comp.code);
           if (!normName) continue;
 
-          let crest = crestMap.get(`${comp.code}:${normName}`) || null;
+          let crest = MASTER_CRESTS[normName] || crestMap.get(`${comp.code}:${normName}`) || null;
           if (!crest && r.competitor?.id) {
             crest = `https://imagecache.365scores.com/image/upload/f_png,w_64,h_64,c_limit,q_auto:eco,d_Competitors:default1.png/v1/Competitors/${r.competitor.id}`;
           }
@@ -1052,8 +1086,11 @@ function initFlashscoreSync({ pool, cron, settleFinishedMatches, reconcileScoreC
   (async () => {
     try {
       await ensureFlashscoreColumns(pool);
-      await syncFlashscoreSchedule(pool, { startDay: -1, endDay: 7 });
+      await syncFlashscoreSchedule(pool, { startDay: -1, endDay: 7, settleFinishedMatches });
       await syncStandings(pool);
+      if (typeof settleFinishedMatches === 'function') {
+        await settleFinishedMatches();
+      }
     } catch (err) {
       console.error('[Flashscore] On-Boot fetch error:', err.message);
     }
@@ -1064,8 +1101,9 @@ function initFlashscoreSync({ pool, cron, settleFinishedMatches, reconcileScoreC
     '0 0 * * *',
     () => {
       console.log('[Flashscore] Midnight Cron Job triggered: refreshing 9-day fixtures schedule (-1 to +7 days) for all leagues...');
-      syncFlashscoreSchedule(pool, { startDay: -1, endDay: 7 })
+      syncFlashscoreSchedule(pool, { startDay: -1, endDay: 7, settleFinishedMatches })
         .then(() => syncStandings(pool))
+        .then(() => (typeof settleFinishedMatches === 'function' ? settleFinishedMatches() : null))
         .catch((err) => {
           console.error('[Flashscore] Midnight Cron error:', err.message);
         });

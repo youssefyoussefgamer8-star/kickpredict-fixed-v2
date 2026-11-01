@@ -8,7 +8,7 @@ export default function MatchCard({ match, user, lang, t, onSaved, onError }) {
   const pred = match.prediction;
   const markets = match.markets_points;
   const settled = match.settled_outcomes;
-  const finished = match.status === 'FINISHED';
+  const finished = match.status === 'FINISHED' || match.live_clock === 'FT';
   const readOnly = !user || match.is_locked;
 
   const [outcome, setOutcome] = useState(pred?.predicted_outcome ?? null);

@@ -89,8 +89,8 @@ assert.strictEqual(formatTunisianTeam('Stade Tunisien'), 'الملعب التو�
 assert.strictEqual(formatTunisianTeam('Club Africain'), 'النادي الإفريقي');
 assert.strictEqual(formatTunisianTeam('Étoile du Sahel'), 'النجم الساحلي');
 assert.strictEqual(getFlashscoreCrest('logo.png'), 'https://static.flashscore.com/res/image/data/logo.png');
-assert.strictEqual(getFlashscoreCrest('AskYUH8k-COxgbCEm.png'), 'https://static.flashscore.com/res/image/data/WWpbDXxS-COxgbCEm.png');
-assert.strictEqual(getFlashscoreCrest('https://static.flashscore.com/res/image/data/AskYUH8k-COxgbCEm.png'), 'https://static.flashscore.com/res/image/data/WWpbDXxS-COxgbCEm.png');
+assert.strictEqual(getFlashscoreCrest('any-logo.png', 'Arsenal'), 'https://crests.football-data.org/57.png');
+assert.strictEqual(getFlashscoreCrest(null, 'الترجي الرياضي'), 'https://imagecache.365scores.com/image/upload/f_png,w_120,h_120,c_limit,q_auto:eco/v1/Competitors/8234');
 console.log('✓ Team names and crests verified');
 
 console.log('--- Testing Status and Score Mapping ---');
@@ -98,7 +98,9 @@ assert.strictEqual(mapFlashscoreStatus({ AB: '1', AC: '1' }), 'SCHEDULED');
 assert.strictEqual(mapFlashscoreStatus({ AB: '2', AC: '1' }), 'IN_PLAY');
 assert.strictEqual(mapFlashscoreStatus({ AB: '2', AC: '17' }), 'PAUSED'); // Halftime
 assert.strictEqual(mapFlashscoreStatus({ AB: '3', AC: '3' }), 'FINISHED');
-assert.strictEqual(mapFlashscoreStatus({ AB: '4', AC: '11' }), 'POSTPONED');
+assert.strictEqual(mapFlashscoreStatus({ AB: '3', AC: '10' }), 'FINISHED'); // Extra time
+assert.strictEqual(mapFlashscoreStatus({ AC: '11' }), 'FINISHED'); // Penalties
+assert.strictEqual(mapFlashscoreStatus({ AB: '4', AC: '1' }), 'POSTPONED');
 assert.strictEqual(mapFlashscoreStatus({ AB: '1', AC: '12' }), 'CANCELLED');
 
 const s = parseFlashscoreScore({ AB: '3', AC: '3', AG: '3', AH: '1', BA: '1', BB: '0' });

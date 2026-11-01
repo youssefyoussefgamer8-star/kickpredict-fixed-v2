@@ -427,7 +427,10 @@ function computeFallbackClockDetails(utcDate, status) {
   }
   if (status !== 'IN_PLAY') return null;
   const elapsedSec = Math.floor((Date.now() - new Date(utcDate).getTime()) / 1000);
-  if (!Number.isFinite(elapsedSec) || elapsedSec < 0 || elapsedSec > 150 * 60) return null;
+  if (!Number.isFinite(elapsedSec) || elapsedSec < 0) return null;
+  if (elapsedSec > 125 * 60) {
+    return { live_clock: 'FT', live_seconds: null, live_stoppage_base: null };
+  }
 
   if (elapsedSec <= 45 * 60) {
     const min = Math.max(1, Math.floor(elapsedSec / 60));
@@ -451,7 +454,7 @@ function computeFallbackClockDetails(utcDate, status) {
     const addedMin = Math.max(1, Math.floor(stopSec / 60));
     return { live_clock: `90+${addedMin}'`, live_seconds: stopSec, live_stoppage_base: 90 };
   }
-  return { live_clock: "90+'", live_seconds: null, live_stoppage_base: 90 };
+  return { live_clock: 'FT', live_seconds: null, live_stoppage_base: null };
 }
 
 async function fetchEspnScoreboard(competition) {
@@ -485,8 +488,10 @@ function enrichMatchWithLiveClock(m, espnEvents) {
   let liveHomeScore = m.home_score;
   let liveAwayScore = m.away_score;
 
-  if (Array.isArray(espnEvents) && espnEvents.length > 0 && m.utc_date) {
-    const mTime = new Date(m.utc_date).getTime();
+  const mTime = m.utc_date ? new Date(m.utc_date).getTime() : null;
+  const elapsedMinutes = mTime ? (Date.now() - mTime) / (60 * 1000) : 0;
+
+  if (Array.isArray(espnEvents) && espnEvents.length > 0 && mTime) {
     let bestEvent = null;
     let bestScore = 0;
 
@@ -517,7 +522,9 @@ function enrichMatchWithLiveClock(m, espnEvents) {
           liveHomeScore = hScore;
           liveAwayScore = aScore;
         }
-      } else if (state === 'post' && !m.settled_outcomes) {
+      } else if (state === 'post') {
+        liveStatus = 'FINISHED';
+        clockInfo = { live_clock: 'FT', live_seconds: null, live_stoppage_base: null };
         const hScore = parseInt(homeComp?.score, 10);
         const aScore = parseInt(awayComp?.score, 10);
         if (!Number.isNaN(hScore) && !Number.isNaN(aScore)) {
@@ -526,6 +533,12 @@ function enrichMatchWithLiveClock(m, espnEvents) {
         }
       }
     }
+  }
+
+  // Overdue safeguard: If match has run > 125 minutes with scores present, transition to FINISHED
+  if (liveStatus !== 'FINISHED' && elapsedMinutes > 125 && liveHomeScore !== null && liveAwayScore !== null) {
+    liveStatus = 'FINISHED';
+    clockInfo = { live_clock: 'FT', live_seconds: null, live_stoppage_base: null };
   }
 
   if (!clockInfo) {
