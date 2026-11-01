@@ -9,7 +9,7 @@ const jwt = require('jsonwebtoken');
 const cron = require('node-cron');
 const { Pool } = require('pg');
 const oddsProvider = require('./oddsProvider');
-const { initFlashscoreSync, syncFlashscoreSchedule, smartLivePolling } = require('./sync-flashscore');
+const { initFlashscoreSync, syncFlashscoreSchedule, smartLivePolling, fetchMatchLiveDetails } = require('./sync-flashscore');
 const { initTunisiaSync } = require('./sync-tunisia');
 
 const {
@@ -976,7 +976,40 @@ app.get(
     if (rows.length === 0) {
       return res.status(404).json({ error: 'Match not found.' });
     }
-    res.json(rows[0]);
+    const row = rows[0];
+    if ((!row.match_lineups || row.status === 'IN_PLAY' || row.status === 'PAUSED') && row.flashscore_id && fetchMatchLiveDetails) {
+      try {
+        const liveDetails = await fetchMatchLiveDetails(row.flashscore_id);
+        if (liveDetails) {
+          const hasLineups = Boolean(liveDetails.lineups);
+          const hasStats = Array.isArray(liveDetails.stats) && liveDetails.stats.length > 0;
+          const hasIncidents = Array.isArray(liveDetails.incidents) && liveDetails.incidents.length > 0;
+
+          if (hasLineups || hasStats || hasIncidents) {
+            await pool.query(
+              `UPDATE matches
+               SET match_stats = COALESCE($1::jsonb, match_stats),
+                   match_incidents = COALESCE($2::jsonb, match_incidents),
+                   match_lineups = COALESCE($3::jsonb, match_lineups),
+                   updated_at = NOW()
+               WHERE id = $4`,
+              [
+                hasStats ? JSON.stringify(liveDetails.stats) : null,
+                hasIncidents ? JSON.stringify(liveDetails.incidents) : null,
+                hasLineups ? JSON.stringify(liveDetails.lineups) : null,
+                matchId
+              ]
+            );
+            if (hasLineups) row.match_lineups = liveDetails.lineups;
+            if (hasStats) row.match_stats = liveDetails.stats;
+            if (hasIncidents) row.match_incidents = liveDetails.incidents;
+          }
+        }
+      } catch (liveErr) {
+        // Non-blocking: continue with cached data
+      }
+    }
+    res.json(row);
   })
 );
 

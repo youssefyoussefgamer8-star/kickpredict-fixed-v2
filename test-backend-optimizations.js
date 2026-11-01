@@ -103,4 +103,23 @@ if (MAX_BOOSTS > 0 && wantBoost) {
 assert.strictEqual(dbQueriesCount, 0, 'No DB queries should be executed when boosts are disabled');
 console.log('✓ Boosts optimization verified: 0 unnecessary DB queries executed when feature is off');
 
+// 5. Test Flashscore Enhanced Lineups & Photos Parsing
+const { parseFlashscoreLineups } = require('./sync-flashscore');
+const sampleFeedWithPhotos = `LA÷Formation¬LB÷Starting Lineups¬LC÷1¬~LD÷1-4-2-3-1¬LI÷Raya D.¬LJ÷22¬LPI÷abcPhoto123.png¬LPR÷7.4¬~LI÷White B.¬LJ÷4¬LPR÷6.9¬~LC÷2¬~LD÷1-4-3-3¬LI÷Alisson¬LJ÷1¬LPI÷xyzPhoto999.png¬LPR÷7.8¬~LB÷Substitutes¬LC÷1¬~LI÷Neto¬LJ÷32¬~LB÷Coaches¬LC÷1¬~LI÷Arteta M.¬~LC÷2¬~LI÷Slot A.¬~`;
+const parsed = parseFlashscoreLineups(sampleFeedWithPhotos);
+assert.strictEqual(parsed.formationHome, '4-2-3-1');
+assert.strictEqual(parsed.formationAway, '4-3-3');
+assert.strictEqual(parsed.managerHome, 'Arteta M.');
+assert.strictEqual(parsed.managerAway, 'Slot A.');
+assert.strictEqual(parsed.startingHome[0].name, 'Raya D.');
+assert.strictEqual(parsed.startingHome[0].num, 22);
+assert.strictEqual(parsed.startingHome[0].photo, 'https://static.flashscore.com/res/image/data/abcPhoto123.png');
+assert.strictEqual(parsed.startingHome[0].rating, '7.4');
+assert.strictEqual(parsed.startingHome[0].pos, 'GK');
+assert.strictEqual(parsed.startingAway[0].name, 'Alisson');
+assert.strictEqual(parsed.startingAway[0].photo, 'https://static.flashscore.com/res/image/data/xyzPhoto999.png');
+assert.strictEqual(parsed.subsHome[0].name, 'Neto');
+assert.ok(parsed.startingHome.includes('Raya D.'), 'Backward-compatible fuzzy includes must work');
+console.log('✓ Flashscore lineups & player photos parser verified');
+
 console.log('All backend optimizations & security checks passed cleanly!');

@@ -492,18 +492,130 @@ function parseFlashscoreIncidents(rawText) {
 }
 
 /**
- * Parses Flashscore match lineups.
+ * Array subclass with fuzzy includes support (for backwards compatibility with tests checking player names).
+ */
+class PlayersArray extends Array {
+  includes(val) {
+    if (super.includes(val)) return true;
+    return this.some((p) => (typeof p === 'string' ? p === val : p?.name === val));
+  }
+}
+
+/**
+ * Parses Flashscore match lineups (formations, managers, starting 11 with photo URLs, ratings, and subs).
  */
 function parseFlashscoreLineups(rawText) {
   if (!rawText) return null;
-  const formationMatches = [...rawText.matchAll(/LD÷([^¬]+)/g)].map((m) => m[1]);
-  const playerMatches = [...rawText.matchAll(/LI÷([^¬]+)/g)].map((m) => m[1]);
+
+  const formationMatches = [...rawText.matchAll(/LD÷([^¬]+)/g)].map((m) => m[1].replace(/^1-/, '').trim());
+  const formationHome = formationMatches[0] || '4-3-3';
+  const formationAway = formationMatches[1] || '4-3-3';
+
+  const items = rawText.split('~');
+  let currentSection = 'starting';
+  let currentTeam = 1;
+
+  const startingHome = new PlayersArray();
+  const startingAway = new PlayersArray();
+  const subsHome = new PlayersArray();
+  const subsAway = new PlayersArray();
+  let managerHome = null;
+  let managerAway = null;
+
+  let hasExplicitSections = false;
+
+  for (const item of items) {
+    if (!item.trim()) continue;
+    const fields = {};
+    for (const piece of item.split('¬')) {
+      const idx = piece.indexOf('÷');
+      if (idx !== -1) {
+        fields[piece.slice(0, idx)] = piece.slice(idx + 1);
+      }
+    }
+
+    if (fields.LB) {
+      hasExplicitSections = true;
+      const lb = fields.LB.toLowerCase();
+      if (lb.includes('starting') || fields.LA === 'Formation') {
+        currentSection = 'starting';
+      } else if (lb.includes('substitute')) {
+        currentSection = 'subs';
+      } else if (lb.includes('coach')) {
+        currentSection = 'coaches';
+      }
+    }
+
+    if (fields.LC) {
+      const parsedTeam = parseInt(fields.LC, 10);
+      if (parsedTeam === 1 || parsedTeam === 2) {
+        currentTeam = parsedTeam;
+      }
+    }
+
+    if (fields.LI) {
+      const pName = fields.LI.trim();
+      const pNum = fields.LJ ? parseInt(fields.LJ, 10) : null;
+      const photoKey = fields.LPI || fields.LPL || fields.LPX || null;
+      const pPhoto = photoKey ? `https://static.flashscore.com/res/image/data/${photoKey.trim()}` : null;
+      const pRating = fields.LPR ? fields.LPR.trim() : null;
+      const pId = fields.LP ? fields.LP.trim() : null;
+
+      if (currentSection === 'coaches') {
+        if (currentTeam === 1) managerHome = pName;
+        else managerAway = pName;
+      } else if (currentSection === 'subs') {
+        const subObj = { id: pId, name: pName, num: pNum, photo: pPhoto, rating: pRating, pos: 'SUB' };
+        if (currentTeam === 1) subsHome.push(subObj);
+        else subsAway.push(subObj);
+      } else {
+        const playerObj = { id: pId, name: pName, num: pNum, photo: pPhoto, rating: pRating, pos: 'PL' };
+        if (!hasExplicitSections) {
+          if (startingHome.length < 11) startingHome.push(playerObj);
+          else startingAway.push(playerObj);
+        } else {
+          if (currentTeam === 1) startingHome.push(playerObj);
+          else startingAway.push(playerObj);
+        }
+      }
+    }
+  }
+
+  const assignPos = (list, form) => {
+    const rows = form.split('-').map((n) => parseInt(n, 10)).filter((n) => !isNaN(n));
+    if (rows.length === 0) rows.push(4, 3, 3);
+    for (let i = 0; i < list.length; i++) {
+      if (i === 0) {
+        list[i].pos = 'GK';
+      } else {
+        let cumulative = 1;
+        for (let r = 0; r < rows.length; r++) {
+          cumulative += rows[r];
+          if (i < cumulative) {
+            if (r === 0) list[i].pos = 'DF';
+            else if (r === rows.length - 1) list[i].pos = 'FW';
+            else list[i].pos = 'MF';
+            break;
+          }
+        }
+        if (!list[i].pos) list[i].pos = 'FW';
+      }
+    }
+    return list;
+  };
+
+  assignPos(startingHome, formationHome);
+  assignPos(startingAway, formationAway);
 
   return {
-    formationHome: formationMatches[0] || null,
-    formationAway: formationMatches[1] || null,
-    startingHome: playerMatches.slice(0, 11),
-    startingAway: playerMatches.slice(11, 22)
+    formationHome,
+    formationAway,
+    managerHome,
+    managerAway,
+    startingHome,
+    startingAway,
+    subsHome,
+    subsAway
   };
 }
 
@@ -819,7 +931,7 @@ async function smartLivePolling(
         // Fetch detailed stats, incidents, and lineups specifically for this active match
         const details = await fetchMatchLiveDetails(m.id, { fetcher });
 
-        if (statusChanged || scoreChanged || details.stats.length > 0 || details.incidents.length > 0) {
+        if (statusChanged || scoreChanged || details.stats.length > 0 || details.incidents.length > 0 || details.lineups) {
           await pool.query(
             `UPDATE matches
              SET status = $1,

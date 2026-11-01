@@ -280,34 +280,68 @@ const KNOWN_ROSTERS = {
   }
 };
 
+// Realistic pools of names for fallback rosters (eliminating any generic "TeamName GK" placeholders)
+const ARABIC_ROSTER_POOL = {
+  gk: ['بن سعيد', 'معز حسن', 'دحمان', 'الفرحاتي', 'الجميل', 'القصراوي', 'البوعزيزي'],
+  df: ['مرياح', 'توغاي', 'بن حميدة', 'بوشنيبة', 'الغدامسي', 'الزموري', 'النصراوي', 'بن عبدة', 'بوعبيد', 'الشريفي', 'بن علي', 'الزاغلوني', 'كشيدة', 'العبدلي'],
+  mf: ['أهولو', 'تقا', 'ساس', 'الزمزمي', 'الصغير', 'سيماكولا', 'الشماخي', 'خليل', 'كوامي', 'الجبلي', 'الدربالي', 'الضاوي', 'السخيري', 'العيدوني'],
+  fw: ['بلايلي', 'رودريغيز', 'موكوانا', 'الخضراوي', 'إيدوو', 'العبيدي', 'بونغونغا', 'بركات', 'الدريدي', 'كانتي', 'سوي', 'الجزيري', 'المساكني'],
+  managers: ['فوزي البنزرتي', 'جلال القادري', 'نبيل معلول', 'راضي الجعايدي', 'منذر الكبير', 'لسعد جردة']
+};
+
+const INTL_ROSTER_POOL = {
+  gk: ['Martinez', 'Silva', 'Costa', 'Sommer', 'Pope', 'Leno', 'Simon', 'Trapp', 'Raya'],
+  df: ['Davies', 'Romero', 'Dias', 'Hernandez', 'Gomez', 'White', 'Bastoni', 'Akanji', 'Botman', 'Tah', 'Guéhi', 'Milenković', 'Konaté', 'Saliba'],
+  mf: ['Fernandez', 'Neves', 'Ruiz', 'Silva', 'Barella', 'Palhinha', 'Tielemans', 'Locatelli', 'Merino', 'Zubimendi', 'Kamara', 'Tonali', 'Rice', 'Mac Allister'],
+  fw: ['Alvarez', 'Watkins', 'Isak', 'Cunha', 'Williams', 'Jackson', 'Nunez', 'Gakpo', 'Lookman', 'Sesko', 'Bowen', 'Openda', 'Saka', 'Havertz'],
+  managers: ['Marco Silva', 'Roberto De Zerbi', 'Ruben Amorim', 'Thiago Motta', 'Unai Emery', 'Andoni Iraola', 'Thomas Frank']
+};
+
+function hashString(str = '') {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) {
+    h = (Math.imul(31, h) + str.charCodeAt(i)) | 0;
+  }
+  return Math.abs(h);
+}
+
 // Generates dynamic realistic roster for any club not explicitly hardcoded
 function generateFallbackRoster(teamName, isHome) {
   const formation = isHome ? '4-3-3' : '4-2-3-1';
-  const short = String(teamName || 'Team').split(' ')[0];
+  const nameStr = String(teamName || 'Team');
+  const isArabic = /[\u0600-\u06FF]/.test(nameStr);
+  const pool = isArabic ? ARABIC_ROSTER_POOL : INTL_ROSTER_POOL;
+  const hBase = hashString(nameStr) + (isHome ? 17 : 43);
+
+  const pick = (arr, offset) => arr[(hBase + offset) % arr.length];
+
   const starting = [
-    { num: 1, name: `${short} GK`, pos: 'GK' },
-    { num: 2, name: `${short} RB`, pos: 'DF' },
-    { num: 4, name: `${short} CB`, pos: 'DF' },
-    { num: 5, name: `${short} CB`, pos: 'DF' },
-    { num: 3, name: `${short} LB`, pos: 'DF' },
-    { num: 6, name: `${short} CDM`, pos: 'MF' },
-    { num: 8, name: `${short} CM`, pos: 'MF' },
-    { num: 10, name: `${short} CAM`, pos: 'MF' },
-    { num: 7, name: `${short} RW`, pos: 'FW' },
-    { num: 9, name: `${short} ST`, pos: 'FW' },
-    { num: 11, name: `${short} LW`, pos: 'FW' }
+    { num: 1, name: pick(pool.gk, 0), pos: 'GK', photo: null },
+    { num: 2, name: pick(pool.df, 1), pos: 'DF', photo: null },
+    { num: 4, name: pick(pool.df, 2), pos: 'DF', photo: null },
+    { num: 5, name: pick(pool.df, 3), pos: 'DF', photo: null },
+    { num: 3, name: pick(pool.df, 4), pos: 'DF', photo: null },
+    { num: 6, name: pick(pool.mf, 5), pos: 'MF', photo: null },
+    { num: 8, name: pick(pool.mf, 6), pos: 'MF', photo: null },
+    { num: 10, name: pick(pool.mf, 7), pos: 'MF', photo: null },
+    { num: 7, name: pick(pool.fw, 8), pos: 'FW', photo: null },
+    { num: 9, name: pick(pool.fw, 9), pos: 'FW', photo: null },
+    { num: 11, name: pick(pool.fw, 10), pos: 'FW', photo: null }
   ];
+
   const subs = [
-    { num: 12, name: `${short} Sub GK`, pos: 'GK' },
-    { num: 13, name: `${short} Sub DF`, pos: 'DF' },
-    { num: 14, name: `${short} Sub MF`, pos: 'MF' },
-    { num: 15, name: `${short} Sub MF`, pos: 'MF' },
-    { num: 17, name: `${short} Sub FW`, pos: 'FW' },
-    { num: 19, name: `${short} Sub FW`, pos: 'FW' }
+    { num: 12, name: pick(pool.gk, 11), pos: 'GK', photo: null },
+    { num: 13, name: pick(pool.df, 12), pos: 'DF', photo: null },
+    { num: 14, name: pick(pool.df, 13), pos: 'DF', photo: null },
+    { num: 15, name: pick(pool.mf, 14), pos: 'MF', photo: null },
+    { num: 16, name: pick(pool.mf, 15), pos: 'MF', photo: null },
+    { num: 17, name: pick(pool.fw, 16), pos: 'FW', photo: null },
+    { num: 19, name: pick(pool.fw, 17), pos: 'FW', photo: null }
   ];
+
   return {
     formation,
-    manager: `${short} Manager`,
+    manager: pick(pool.managers, 0),
     starting,
     subs
   };
@@ -401,12 +435,98 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
   const awayScore = match.away_score;
   const hasScore = homeScore != null && awayScore != null;
 
-  // Resolve Rosters
-  const homeRoster = KNOWN_ROSTERS[match.home_team] || generateFallbackRoster(match.home_team, true);
-  const awayRoster = KNOWN_ROSTERS[match.away_team] || generateFallbackRoster(match.away_team, false);
+  // Resolve Rosters (Prioritize real lineups parsed from Flashscore API if present)
+  let realLineups = null;
+  if (realDetails?.match_lineups) {
+    if (typeof realDetails.match_lineups === 'object') {
+      realLineups = realDetails.match_lineups;
+    } else if (typeof realDetails.match_lineups === 'string') {
+      try {
+        realLineups = JSON.parse(realDetails.match_lineups);
+      } catch (e) {
+        realLineups = null;
+      }
+    }
+  }
 
-  // Resolve Stats (Real if available, else generated realistic mock)
-  const statsList = generateMockStats(match);
+  const fallbackHome = KNOWN_ROSTERS[match.home_team] || generateFallbackRoster(match.home_team, true);
+  const fallbackAway = KNOWN_ROSTERS[match.away_team] || generateFallbackRoster(match.away_team, false);
+
+  const homeRoster =
+    realLineups?.startingHome && realLineups.startingHome.length >= 11
+      ? {
+          formation: realLineups.formationHome || fallbackHome.formation,
+          manager: realLineups.managerHome || fallbackHome.manager,
+          starting: realLineups.startingHome.map((p, idx) => ({
+            num: p.num ?? (idx + 1),
+            name: p.name || `Player ${idx + 1}`,
+            pos: p.pos || (idx === 0 ? 'GK' : 'MF'),
+            photo: p.photo || null,
+            rating: p.rating || null
+          })),
+          subs: (realLineups.subsHome || []).map((p, idx) => ({
+            num: p.num ?? (12 + idx),
+            name: p.name || `Sub ${idx + 1}`,
+            pos: p.pos || 'SUB',
+            photo: p.photo || null,
+            rating: p.rating || null
+          }))
+        }
+      : fallbackHome;
+
+  const awayRoster =
+    realLineups?.startingAway && realLineups.startingAway.length >= 11
+      ? {
+          formation: realLineups.formationAway || fallbackAway.formation,
+          manager: realLineups.managerAway || fallbackAway.manager,
+          starting: realLineups.startingAway.map((p, idx) => ({
+            num: p.num ?? (idx + 1),
+            name: p.name || `Player ${idx + 1}`,
+            pos: p.pos || (idx === 0 ? 'GK' : 'MF'),
+            photo: p.photo || null,
+            rating: p.rating || null
+          })),
+          subs: (realLineups.subsAway || []).map((p, idx) => ({
+            num: p.num ?? (12 + idx),
+            name: p.name || `Sub ${idx + 1}`,
+            pos: p.pos || 'SUB',
+            photo: p.photo || null,
+            rating: p.rating || null
+          }))
+        }
+      : fallbackAway;
+
+  // Resolve Stats (Real from Flashscore if available, else generated realistic mock)
+  let parsedRealStats = null;
+  if (realDetails?.match_stats) {
+    if (Array.isArray(realDetails.match_stats)) {
+      parsedRealStats = realDetails.match_stats;
+    } else if (typeof realDetails.match_stats === 'string') {
+      try {
+        parsedRealStats = JSON.parse(realDetails.match_stats);
+      } catch (e) {
+        parsedRealStats = null;
+      }
+    }
+  }
+
+  const statsList =
+    parsedRealStats && parsedRealStats.length > 0
+      ? parsedRealStats.map((st, idx) => {
+          const homeVal = parseFloat(String(st.home || '').replace('%', '')) || 0;
+          const awayVal = parseFloat(String(st.away || '').replace('%', '')) || 0;
+          return {
+            key: `real_stat_${idx}`,
+            labelEn: st.name || 'Stat',
+            labelAr: st.name || 'إحصائية',
+            home: String(st.home ?? 0),
+            away: String(st.away ?? 0),
+            homeVal,
+            awayVal,
+            reverseBetter: ['fouls', 'yellow', 'red', 'offsides'].some((k) => (st.name || '').toLowerCase().includes(k))
+          };
+        })
+      : generateMockStats(match);
 
   // Competition Logo
   const compLogo = LEAGUE_LOGOS[match.competition_code] || LEAGUE_LOGOS.TUN;
@@ -698,13 +818,22 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
                     </span>
                   </div>
                   <div className="grid grid-cols-2 gap-2 text-xs">
-                    {homeRoster.subs.map((p) => (
-                      <div key={p.num} className="flex items-center gap-2 rounded-lg bg-black/30 p-1.5 border border-white/5">
-                        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500/20 text-[10px] font-mono font-bold text-emerald-400">
-                          {p.num}
-                        </span>
-                        <span className="truncate text-gray-200 font-semibold">{p.name}</span>
-                        <span className="text-[9px] text-gray-500 uppercase ml-auto">{p.pos}</span>
+                    {homeRoster.subs.map((p, idx) => (
+                      <div
+                        key={`${p.num || idx}-${p.name}`}
+                        className="flex items-center gap-2 rounded-xl bg-black/40 p-1.5 border border-white/5 hover:border-emerald-500/30 transition"
+                      >
+                        <PlayerAvatar
+                          photo={p.photo}
+                          name={p.name}
+                          num={p.num}
+                          rating={p.rating}
+                          isHome={true}
+                          pos={p.pos}
+                          size="sm"
+                        />
+                        <span className="truncate text-gray-200 font-bold text-xs">{p.name}</span>
+                        <span className="text-[10px] text-gray-400 uppercase font-mono ml-auto">{p.pos || 'SUB'}</span>
                       </div>
                     ))}
                   </div>
@@ -721,13 +850,22 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
                     </span>
                   </div>
                   <div className="grid grid-cols-2 gap-2 text-xs">
-                    {awayRoster.subs.map((p) => (
-                      <div key={p.num} className="flex items-center gap-2 rounded-lg bg-black/30 p-1.5 border border-white/5">
-                        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-500/20 text-[10px] font-mono font-bold text-amber-400">
-                          {p.num}
-                        </span>
-                        <span className="truncate text-gray-200 font-semibold">{p.name}</span>
-                        <span className="text-[9px] text-gray-500 uppercase ml-auto">{p.pos}</span>
+                    {awayRoster.subs.map((p, idx) => (
+                      <div
+                        key={`${p.num || idx}-${p.name}`}
+                        className="flex items-center gap-2 rounded-xl bg-black/40 p-1.5 border border-white/5 hover:border-amber-500/30 transition"
+                      >
+                        <PlayerAvatar
+                          photo={p.photo}
+                          name={p.name}
+                          num={p.num}
+                          rating={p.rating}
+                          isHome={false}
+                          pos={p.pos}
+                          size="sm"
+                        />
+                        <span className="truncate text-gray-200 font-bold text-xs">{p.name}</span>
+                        <span className="text-[10px] text-gray-400 uppercase font-mono ml-auto">{p.pos || 'SUB'}</span>
                       </div>
                     ))}
                   </div>
@@ -767,12 +905,12 @@ function renderTacticalFormation(players = [], formationStr = '4-3-3', isHome = 
         // Away: Line 0 (GK) at ~7%, Line N (FW) at ~43%
         let topPct = 0;
         if (isHome) {
-          const tMin = 58;
+          const tMin = 57;
           const tMax = 93;
           topPct = tMax - (lineIdx / (totalLines - 1)) * (tMax - tMin);
         } else {
           const tMin = 7;
-          const tMax = 42;
+          const tMax = 43;
           topPct = tMin + (lineIdx / (totalLines - 1)) * (tMax - tMin);
         }
 
@@ -791,27 +929,23 @@ function renderTacticalFormation(players = [], formationStr = '4-3-3', isHome = 
           <React.Fragment key={`line-${isHome ? 'h' : 'a'}-${lineIdx}`}>
             {rowPlayers.map(({ player, leftPct }) => (
               <div
-                key={player.num}
-                className="absolute flex flex-col items-center justify-center -translate-x-1/2 -translate-y-1/2 transition-transform hover:scale-110 cursor-pointer"
+                key={`${player.num || ''}-${player.name}`}
+                className="absolute flex flex-col items-center justify-center -translate-x-1/2 -translate-y-1/2 transition-transform hover:scale-115 hover:z-20 cursor-pointer"
                 style={{ top: `${topPct}%`, left: `${leftPct}%` }}
+                title={`${player.name} (${player.pos || ''}) #${player.num || ''}`}
               >
-                {/* Player Jersey Circle */}
-                <div
-                  className={`flex h-7 w-7 sm:h-8 sm:w-8 items-center justify-center rounded-full border-2 shadow-md ${
-                    isHome
-                      ? player.pos === 'GK'
-                        ? 'bg-amber-400 border-white text-black'
-                        : 'bg-emerald-600 border-white text-white'
-                      : player.pos === 'GK'
-                      ? 'bg-purple-600 border-white text-white'
-                      : 'bg-rose-600 border-white text-white'
-                  }`}
-                >
-                  <span className="text-[10px] sm:text-xs font-mono font-black">{player.num}</span>
-                </div>
+                {/* Player Photo or Silhouette Avatar */}
+                <PlayerAvatar
+                  photo={player.photo}
+                  name={player.name}
+                  num={player.num}
+                  rating={player.rating}
+                  isHome={isHome}
+                  pos={player.pos}
+                />
 
                 {/* Player Name Tag */}
-                <span className="mt-0.5 max-w-[68px] sm:max-w-[76px] truncate rounded bg-black/75 px-1.5 py-0.2 text-[9px] sm:text-[10px] font-extrabold text-white text-center shadow-sm">
+                <span className="mt-0.5 max-w-[72px] sm:max-w-[84px] truncate rounded bg-black/85 backdrop-blur-sm border border-white/10 px-1 py-0.2 text-[9px] sm:text-[10px] font-extrabold text-white text-center shadow-md">
                   {player.name}
                 </span>
               </div>
@@ -819,6 +953,87 @@ function renderTacticalFormation(players = [], formationStr = '4-3-3', isHome = 
           </React.Fragment>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * Professional Player Avatar Component
+ * 1. Shows player headshot image (player.photo) when provided.
+ * 2. If photo is missing or fails to load, gracefully falls back to a sleek gray silhouette bust.
+ * 3. Never renders a plain colored circle. Overlays jersey number in a neat corner badge.
+ */
+function PlayerAvatar({ photo, name, num, rating, isHome, pos, size = 'md' }) {
+  const [imgFailed, setImgFailed] = useState(false);
+  const hasPhoto = Boolean(photo && !imgFailed);
+  const isGK = pos === 'GK' || num === 1;
+
+  const sizeClasses = size === 'sm' ? 'h-6 w-6' : 'h-8 w-8 sm:h-10 sm:w-10';
+
+  const ringClasses = isHome
+    ? isGK
+      ? 'border-yellow-400 bg-amber-950/60 shadow-yellow-500/20'
+      : 'border-emerald-400 bg-emerald-950/60 shadow-emerald-500/20'
+    : isGK
+    ? 'border-purple-400 bg-purple-950/60 shadow-purple-500/20'
+    : 'border-amber-400 bg-amber-950/60 shadow-amber-500/20';
+
+  return (
+    <div className="relative inline-flex items-center justify-center select-none group">
+      {/* Circular Avatar Container */}
+      <div
+        className={`relative flex ${sizeClasses} items-center justify-center rounded-full border-2 overflow-hidden shadow-lg transition-transform ${ringClasses}`}
+      >
+        {hasPhoto ? (
+          <img
+            src={photo}
+            alt={name || 'Player'}
+            className="h-full w-full object-cover object-top"
+            loading="lazy"
+            onError={() => setImgFailed(true)}
+          />
+        ) : (
+          /* High-end grey silhouette bust icon */
+          <div className="flex h-full w-full items-center justify-center bg-gradient-to-b from-[#2E3742] via-[#212932] to-[#141A21]">
+            <svg
+              className="h-[70%] w-[70%] text-gray-300 drop-shadow"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <path
+                fillRule="evenodd"
+                d="M12 2.5a4.75 4.75 0 0 0-4.75 4.75v.5a4.75 4.75 0 0 0 9.5 0v-.5A4.75 4.75 0 0 0 12 2.5zM4 20.25a7.75 7.75 0 0 1 15.5 0 .75.75 0 0 1-.75.75H4.75a.75.75 0 0 1-.75-.75z"
+                clipRule="evenodd"
+              />
+            </svg>
+          </div>
+        )}
+      </div>
+
+      {/* Jersey Number Badge Overlay */}
+      {num != null && (
+        <span
+          className={`absolute -bottom-1 -right-1 flex h-3.5 min-w-[15px] px-0.5 items-center justify-center rounded-full text-[8px] sm:text-[9px] font-mono font-black border shadow-md ${
+            isHome
+              ? isGK
+                ? 'bg-yellow-400 text-black border-black/30'
+                : 'bg-emerald-500 text-black border-white/60'
+              : isGK
+              ? 'bg-purple-500 text-white border-white/60'
+              : 'bg-amber-400 text-black border-black/30'
+          }`}
+        >
+          {num}
+        </span>
+      )}
+
+      {/* Optional Rating Badge */}
+      {rating && (
+        <span className="absolute -top-1 -right-1 flex h-3.5 min-w-[14px] px-0.5 items-center justify-center rounded-full bg-blue-600 text-[8px] font-mono font-black text-white border border-white/40 shadow-sm">
+          {rating}
+        </span>
+      )}
     </div>
   );
 }
