@@ -69,7 +69,6 @@ ALTER TABLE matches
     ADD COLUMN IF NOT EXISTS settled_away_ht INT,
     ADD COLUMN IF NOT EXISTS last_corrected_at TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS af_fixture_id BIGINT,
-    ADD COLUMN IF NOT EXISTS fotmob_id BIGINT,
     ADD COLUMN IF NOT EXISTS odds_source VARCHAR(20),
     ADD COLUMN IF NOT EXISTS odds_updated_at TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS points_calculated BOOLEAN DEFAULT FALSE,
@@ -201,7 +200,6 @@ CREATE INDEX IF NOT EXISTS idx_matches_comp_round ON matches (competition_code, 
 CREATE INDEX IF NOT EXISTS idx_matches_unsettled ON matches (status, points_calculated)
     WHERE status = 'FINISHED' AND points_calculated = FALSE;
 CREATE INDEX IF NOT EXISTS idx_matches_af_fixture ON matches (af_fixture_id) WHERE af_fixture_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_matches_fotmob_id ON matches (fotmob_id) WHERE fotmob_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_predictions_match ON predictions (match_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_predictions_user_match_unique ON predictions (user_id, match_id);
 
