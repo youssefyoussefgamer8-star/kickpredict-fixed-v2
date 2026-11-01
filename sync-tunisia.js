@@ -6,7 +6,7 @@ const { teamRatings, matchLambdas, buildMatchMarketsPoints } = require('./pricin
 // SofaScore Unique Tournament ID for Tunisian Ligue Professionnelle 1: 984
 const TOURNAMENT_ID = Number(process.env.SOFASCORE_TOURNAMENT_ID || 984);
 const RAPIDAPI_KEY = (process.env.RAPIDAPI_KEY || '').trim();
-const RAPIDAPI_HOST = (process.env.RAPIDAPI_SOFA_HOST || 'sofascore-api6.p.rapidapi.com').trim();
+const RAPIDAPI_HOST = (process.env.RAPIDAPI_SOFA_HOST || 'sportapi7.p.rapidapi.com').trim();
 const DIRECT_BASE_URL = (process.env.SOFASCORE_BASE_URL || 'https://api.sofascore.com/api/v1').replace(/\/+$/, '');
 
 let cachedSeasonId = process.env.TUNISIA_SOFASCORE_SEASON_ID
@@ -40,60 +40,31 @@ if (proxyUrl) {
 }
 
 /**
- * Sanitizes and cleans API paths to prevent redundant slashes (//) and /api/v1 prefixes
+ * Sanitizes and cleans API paths to prevent redundant slashes (//)
  */
 function sanitizePath(p) {
   if (!p) return '';
   return String(p)
     .trim()
     .replace(/^\/+/, '')
-    .replace(/^(api\/)?v1\/?/, '')
-    .replace(/^\/+/, '')
     .replace(/\/+$/, '')
     .replace(/\/+/g, '/');
 }
 
 /**
- * Documented official candidate configurations on RapidAPI for tournament match fixtures/results.
- * Specifically targets "Get Tournament Events by Season": /tournaments/get-events
- * with tournamentId=984 & seasonId=65427 (and uniqueTournamentId fallback).
+ * SportAPI official endpoints for tournament match fixtures/results mirroring SofaScore native paths:
+ *   /api/v1/unique-tournament/{tournamentId}/season/{seasonId}/events/{course}/{page}
  */
-function getRapidApiCandidateConfigs(tournamentId = TOURNAMENT_ID, seasonId = 65427) {
-  if (process.env.RAPIDAPI_SOFA_ENDPOINT) {
-    const custom = sanitizePath(process.env.RAPIDAPI_SOFA_ENDPOINT);
-    return [
-      { endpoint: custom, params: { tournamentId, seasonId } },
-      { endpoint: custom, params: { uniqueTournamentId: tournamentId, seasonId } },
-      { endpoint: custom, params: { tournament_id: tournamentId, season_id: seasonId } }
-    ];
-  }
-
-  return [
-    // 1. Primary documented endpoint on sofascore-api6 for "Get Tournament Events by Season"
-    { endpoint: 'tournaments/get-events', params: { tournamentId, seasonId } },
-    // 2. Tournament unique identifier variation (e.g. uniqueTournamentId)
-    { endpoint: 'tournaments/get-events', params: { uniqueTournamentId: tournamentId, seasonId } },
-    // 3. Snake_case parameter variation
-    { endpoint: 'tournaments/get-events', params: { tournament_id: tournamentId, season_id: seasonId } },
-    // 4. Clean secondary fallback: tournaments/events
-    { endpoint: 'tournaments/events', params: { tournamentId, seasonId } },
-    // 5. Clean season-scoped fallback: seasons/{seasonId}/events
-    { endpoint: `seasons/${seasonId}/events`, params: {} }
-  ];
-}
-
 function getRapidApiCandidateEndpoints(course = 'last', tournamentId = TOURNAMENT_ID, seasonId = 65427, page = 0) {
   if (process.env.RAPIDAPI_SOFA_ENDPOINT) {
     return [sanitizePath(process.env.RAPIDAPI_SOFA_ENDPOINT)];
   }
   return [
-    'tournaments/get-events',
-    'tournaments/events',
-    `seasons/${seasonId}/events`
+    `api/v1/unique-tournament/${tournamentId}/season/${seasonId}/events/${course}/${page}`,
+    `unique-tournament/${tournamentId}/season/${seasonId}/events/${course}/${page}`
   ];
 }
 
-let cachedWorkingConfig = null;
 let cachedWorkingEndpoint = null;
 
 /**
@@ -109,7 +80,8 @@ async function sofaFetch(path, params = {}) {
 
   if (isRapidApi) {
     const host = RAPIDAPI_HOST.replace(/\/+$/, '');
-    url = new URL(`https://${host}/${cleanPath}`);
+    const fullPath = cleanPath.startsWith('api/v1') ? cleanPath : `api/v1/${cleanPath}`;
+    url = new URL(`https://${host}/${fullPath}`);
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
     }
@@ -120,7 +92,8 @@ async function sofaFetch(path, params = {}) {
     };
   } else {
     const base = DIRECT_BASE_URL.replace(/\/+$/, '');
-    url = new URL(`${base}/${cleanPath}`);
+    const directPath = cleanPath.replace(/^api\/v1\/?/, '');
+    url = new URL(`${base}/${directPath}`);
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
     }
@@ -158,46 +131,35 @@ async function sofaFetch(path, params = {}) {
 }
 
 /**
- * Fetches tournament events via official documented RapidAPI endpoint (/tournaments/get-events)
- * or via direct SofaScore route when not using RapidAPI.
+ * Fetches tournament events via SportAPI on RapidAPI (or direct SofaScore).
+ * Mirrors SofaScore exact native paths:
+ *   /api/v1/unique-tournament/{tournamentId}/season/{seasonId}/events/{course}/{page}
  */
 async function fetchTournamentEvents({
   tournamentId = TOURNAMENT_ID,
   seasonId = 65427,
   course = 'last',
   page = 0,
-  fetcher = fetch
+  fetcher = null
 } = {}) {
   const isRapidApi = Boolean(process.env.RAPIDAPI_KEY && process.env.RAPIDAPI_KEY.trim());
+  const path = `api/v1/unique-tournament/${tournamentId}/season/${seasonId}/events/${course}/${page}`;
 
   if (!isRapidApi) {
-    const directPath = `unique-tournament/${tournamentId}/season/${seasonId}/events/${course}/${page}`;
-    return sofaFetch(directPath);
+    return sofaFetch(path);
   }
 
-  const candidateConfigs = getRapidApiCandidateConfigs(tournamentId, seasonId);
-  const configs = cachedWorkingConfig
-    ? [
-        cachedWorkingConfig,
-        ...candidateConfigs.filter(
-          (c) =>
-            c.endpoint !== cachedWorkingConfig.endpoint ||
-            JSON.stringify(c.params) !== JSON.stringify(cachedWorkingConfig.params)
-        )
-      ]
-    : candidateConfigs;
+  const candidateList = getRapidApiCandidateEndpoints(course, tournamentId, seasonId, page);
+  const candidates = cachedWorkingEndpoint
+    ? [cachedWorkingEndpoint, ...candidateList.filter((e) => e !== cachedWorkingEndpoint)]
+    : candidateList;
 
   let lastError = null;
   const host = RAPIDAPI_HOST.replace(/\/+$/, '');
 
-  for (const config of configs) {
-    const cleanEndpoint = sanitizePath(config.endpoint);
+  for (const endpoint of candidates) {
+    const cleanEndpoint = sanitizePath(endpoint);
     const url = new URL(`https://${host}/${cleanEndpoint}`);
-    for (const [k, v] of Object.entries(config.params || {})) {
-      if (v !== undefined && v !== null) {
-        url.searchParams.set(k, String(v));
-      }
-    }
 
     const options = {
       headers: {
@@ -209,21 +171,21 @@ async function fetchTournamentEvents({
     };
 
     try {
-      console.log(`[Tunisia SofaScore] Querying documented endpoint: ${url.toString()}`);
-      const res = await fetcher(url.toString(), options);
+      console.log(`[Tunisia SofaScore] Querying SportAPI: ${url.toString()}`);
+      const actualFetcher = typeof fetcher === 'function' ? fetcher : fetch;
+      const res = await actualFetcher(url.toString(), options);
       if (res.status === 404) {
-        console.warn(`[Tunisia SofaScore] Candidate /${cleanEndpoint}?${url.searchParams.toString()} returned 404 Not Found.`);
-        lastError = new Error(`RapidAPI endpoint /${cleanEndpoint} returned 404`);
+        console.warn(`[Tunisia SofaScore] Candidate /${cleanEndpoint} returned 404 Not Found.`);
+        lastError = new Error(`SportAPI endpoint /${cleanEndpoint} returned 404`);
         continue;
       }
       if (!res.ok) {
         console.error(`[Tunisia SofaScore] Candidate /${cleanEndpoint} returned HTTP ${res.status} (${res.statusText})`);
-        throw new Error(`RapidAPI HTTP ${res.status} (${res.statusText}) on /${cleanEndpoint}`);
+        throw new Error(`SportAPI HTTP ${res.status} (${res.statusText}) on /${cleanEndpoint}`);
       }
       const data = await res.json();
-      console.log(`[Tunisia SofaScore] RapidAPI /${cleanEndpoint} succeeded (HTTP 200).`);
+      console.log(`[Tunisia SofaScore] SportAPI /${cleanEndpoint} succeeded (HTTP 200).`);
       console.log(`[Tunisia SofaScore] Raw JSON payload:`, JSON.stringify(data).slice(0, 4000));
-      cachedWorkingConfig = config;
       cachedWorkingEndpoint = cleanEndpoint;
       return data;
     } catch (err) {
@@ -235,7 +197,7 @@ async function fetchTournamentEvents({
     }
   }
 
-  throw lastError || new Error(`Documented endpoint /tournaments/get-events for tournament ${tournamentId} returned 404 on ${RAPIDAPI_HOST}`);
+  throw lastError || new Error(`SportAPI endpoint /${path} returned 404 on ${RAPIDAPI_HOST}`);
 }
 
 /**
@@ -422,11 +384,8 @@ async function getActiveSeasonId(fetcher = sofaFetch) {
   const isRapidApi = Boolean(process.env.RAPIDAPI_KEY && process.env.RAPIDAPI_KEY.trim());
   if (isRapidApi) {
     const seasonCandidates = [
-      'tournaments/get-seasons',
-      'tournaments/seasons',
-      'tournament/get-seasons',
-      `unique-tournament/${TOURNAMENT_ID}/seasons`,
-      `api/v1/unique-tournament/${TOURNAMENT_ID}/seasons`
+      `api/v1/unique-tournament/${TOURNAMENT_ID}/seasons`,
+      `unique-tournament/${TOURNAMENT_ID}/seasons`
     ];
 
     const host = RAPIDAPI_HOST.replace(/\/+$/, '');
@@ -434,9 +393,6 @@ async function getActiveSeasonId(fetcher = sofaFetch) {
       try {
         const cleanEp = sanitizePath(ep);
         const url = new URL(`https://${host}/${cleanEp}`);
-        url.searchParams.set('tournamentId', String(TOURNAMENT_ID));
-        url.searchParams.set('tournament_id', String(TOURNAMENT_ID));
-        url.searchParams.set('id', String(TOURNAMENT_ID));
 
         const res = await (fetcher === sofaFetch ? fetch : fetcher)(url.toString(), {
           headers: {
@@ -493,61 +449,48 @@ async function syncTunisianLeague(pool) {
     const isRapidApi = Boolean(process.env.RAPIDAPI_KEY && process.env.RAPIDAPI_KEY.trim());
     const seasonId = await getActiveSeasonId();
     console.log(
-      `[Tunisia SofaScore] Syncing Tournament ID ${TOURNAMENT_ID}, Season ID ${seasonId} (mode: ${isRapidApi ? 'RapidAPI Gateway' : 'Direct / Proxy'}).`
+      `[Tunisia SofaScore] Syncing Tournament ID ${TOURNAMENT_ID}, Season ID ${seasonId} (mode: ${isRapidApi ? 'RapidAPI Gateway (SportAPI)' : 'Direct / Proxy'}).`
     );
 
-    let allEvents = [];
-    if (isRapidApi) {
-      console.log(`[Tunisia SofaScore] Fetching tournament events via documented RapidAPI endpoint (/tournaments/get-events)...`);
-      try {
-        const eventsData = await fetchTournamentEvents({ tournamentId: TOURNAMENT_ID, seasonId });
-        console.log(`[Tunisia SofaScore] Raw response for 'tournaments/get-events':`, JSON.stringify(eventsData).slice(0, 3000));
-        allEvents = extractEventsFromResponse(eventsData);
-        console.log(`[Tunisia SofaScore] Extracted ${allEvents.length} events from documented RapidAPI endpoint.`);
-      } catch (err) {
-        console.error(`[Tunisia SofaScore] Fetch events failed:`, err.message);
-      }
+    // Fetch finished fixtures (course: 'last') and upcoming scheduled fixtures (course: 'next') via SportAPI
+    const [lastRes, nextRes] = await Promise.allSettled([
+      fetchTournamentEvents({ tournamentId: TOURNAMENT_ID, seasonId, course: 'last', page: 0 }),
+      fetchTournamentEvents({ tournamentId: TOURNAMENT_ID, seasonId, course: 'next', page: 0 })
+    ]);
+
+    if (lastRes.status === 'fulfilled') {
+      console.log(`[Tunisia SofaScore] Raw response for 'last':`, JSON.stringify(lastRes.value).slice(0, 3000));
     } else {
-      // Direct SofaScore route: fetch 'last' (finished) and 'next' (upcoming)
-      const [lastRes, nextRes] = await Promise.allSettled([
-        fetchTournamentEvents({ tournamentId: TOURNAMENT_ID, seasonId, course: 'last', page: 0 }),
-        fetchTournamentEvents({ tournamentId: TOURNAMENT_ID, seasonId, course: 'next', page: 0 })
-      ]);
-
-      if (lastRes.status === 'fulfilled') {
-        console.log(`[Tunisia SofaScore] Raw response for 'last':`, JSON.stringify(lastRes.value).slice(0, 3000));
-      } else {
-        console.error(`[Tunisia SofaScore] Fetch 'last' failed:`, lastRes.reason?.message);
-      }
-
-      if (nextRes.status === 'fulfilled') {
-        console.log(`[Tunisia SofaScore] Raw response for 'next':`, JSON.stringify(nextRes.value).slice(0, 3000));
-      } else {
-        console.error(`[Tunisia SofaScore] Fetch 'next' failed:`, nextRes.reason?.message);
-      }
-
-      const finishedEvents = lastRes.status === 'fulfilled'
-        ? extractEventsFromResponse(lastRes.value)
-        : [];
-      const upcomingEvents = nextRes.status === 'fulfilled'
-        ? extractEventsFromResponse(nextRes.value)
-        : [];
-
-      console.log(
-        `[Tunisia SofaScore] Extracted ${finishedEvents.length} finished events and ${upcomingEvents.length} upcoming events.`
-      );
-
-      // Deduplicate events by event ID
-      const eventsMap = new Map();
-      for (const ev of [...finishedEvents, ...upcomingEvents]) {
-        const extId = ev?.id ?? ev?.external_id ?? ev?.matchId;
-        if (extId !== undefined && extId !== null) eventsMap.set(String(extId), ev);
-      }
-      allEvents = Array.from(eventsMap.values());
+      console.error(`[Tunisia SofaScore] Fetch 'last' failed:`, lastRes.reason?.message);
     }
 
+    if (nextRes.status === 'fulfilled') {
+      console.log(`[Tunisia SofaScore] Raw response for 'next':`, JSON.stringify(nextRes.value).slice(0, 3000));
+    } else {
+      console.error(`[Tunisia SofaScore] Fetch 'next' failed:`, nextRes.reason?.message);
+    }
+
+    const finishedEvents = lastRes.status === 'fulfilled'
+      ? extractEventsFromResponse(lastRes.value)
+      : [];
+    const upcomingEvents = nextRes.status === 'fulfilled'
+      ? extractEventsFromResponse(nextRes.value)
+      : [];
+
+    console.log(
+      `[Tunisia SofaScore] Extracted ${finishedEvents.length} finished events and ${upcomingEvents.length} upcoming events.`
+    );
+
+    // Deduplicate events by event ID
+    const eventsMap = new Map();
+    for (const ev of [...finishedEvents, ...upcomingEvents]) {
+      const extId = ev?.id ?? ev?.external_id ?? ev?.matchId;
+      if (extId !== undefined && extId !== null) eventsMap.set(String(extId), ev);
+    }
+    const allEvents = Array.from(eventsMap.values());
+
     if (!allEvents.length) {
-      console.warn('[Tunisia SofaScore] No events returned from candidate endpoints. Preserving existing database records.');
+      console.warn('[Tunisia SofaScore] No events returned from SportAPI. Preserving existing database records.');
       return;
     }
 
@@ -723,16 +666,17 @@ async function smartPollTunisia(
 
     let data;
     if (typeof fetcher === 'function' && fetcher !== sofaFetch && fetcher !== fetch) {
-      data = await fetcher(`/tournaments/get-events`, {
-        tournamentId: TOURNAMENT_ID,
-        seasonId
-      });
+      data = await fetcher(
+        `/api/v1/unique-tournament/${TOURNAMENT_ID}/season/${seasonId}/events/${roundEndpoint}/0`,
+        { tournamentId: TOURNAMENT_ID, seasonId, course: roundEndpoint, page: 0 }
+      );
     } else {
       data = await fetchTournamentEvents({
         tournamentId: TOURNAMENT_ID,
         seasonId,
         course: roundEndpoint,
-        page: 0
+        page: 0,
+        fetcher
       });
     }
 
@@ -894,16 +838,8 @@ module.exports = {
   getActiveSeasonId,
   setCachedSeasonId: (id) => { cachedSeasonId = id; },
   getCachedSeasonId: () => cachedSeasonId,
-  setCachedWorkingEndpoint: (ep) => {
-    cachedWorkingEndpoint = ep;
-    if (ep) {
-      cachedWorkingConfig = { endpoint: ep, params: { tournamentId: TOURNAMENT_ID, seasonId: cachedSeasonId } };
-    } else {
-      cachedWorkingConfig = null;
-    }
-  },
+  setCachedWorkingEndpoint: (ep) => { cachedWorkingEndpoint = ep; },
   getCachedWorkingEndpoint: () => cachedWorkingEndpoint,
-  getRapidApiCandidateConfigs,
   TOURNAMENT_ID
 };
 

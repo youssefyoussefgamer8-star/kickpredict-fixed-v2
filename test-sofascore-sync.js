@@ -89,10 +89,10 @@ assert.strictEqual(r2.key, 'CHAMPIONSHIP_PLAYOFF_1');
 console.log('✓ All Round Info extraction tests passed');
 
 console.log('--- Testing URL Path Sanitization (Double-Slash Prevention) ---');
-assert.strictEqual(sanitizePath('/unique-tournament/984/seasons'), 'unique-tournament/984/seasons');
-assert.strictEqual(sanitizePath('//api/v1/unique-tournament//984/seasons//'), 'unique-tournament/984/seasons');
-assert.strictEqual(sanitizePath('/tournaments/get-events'), 'tournaments/get-events');
-assert.strictEqual(sanitizePath('//tournaments/get-events//'), 'tournaments/get-events');
+assert.strictEqual(sanitizePath('/api/v1/unique-tournament/984/seasons'), 'api/v1/unique-tournament/984/seasons');
+assert.strictEqual(sanitizePath('//api/v1/unique-tournament//984/seasons//'), 'api/v1/unique-tournament/984/seasons');
+assert.strictEqual(sanitizePath('/api/v1/unique-tournament/984/season/65427/events/last/0'), 'api/v1/unique-tournament/984/season/65427/events/last/0');
+assert.strictEqual(sanitizePath('//api/v1/unique-tournament//984/season/65427/events/last/0//'), 'api/v1/unique-tournament/984/season/65427/events/last/0');
 assert.strictEqual(sanitizePath('///'), '');
 console.log('✓ Path sanitization handles leading, trailing, and duplicate slashes cleanly');
 
@@ -295,6 +295,7 @@ console.log('--- Testing Aggregated Smart Polling for Concurrent Matches ---');
 
   // Verify exactly 1 single batch call was made regardless of 4 concurrent matches
   assert.strictEqual(fetchCount, 1, 'Exactly 1 batch request must be sent for all concurrent matches');
+  assert.strictEqual(fetchedPath, '/api/v1/unique-tournament/984/season/65427/events/last/0');
   console.log('✓ Exactly 1 aggregated API request sent for 4 concurrent matches');
 
   // Verify all 4 matches were updated
@@ -318,7 +319,7 @@ console.log('--- Testing Aggregated Smart Polling for Concurrent Matches ---');
   assert.strictEqual(reconciledRows.length, 4, 'reconcileScoreCorrections was called with 4 updated rows');
   console.log('✓ All 4 concurrent matches updated, reconciled, and settled accurately from 1 request');
 
-  console.log('--- Testing Official Dedicated RapidAPI Endpoints & Candidate Fallback ---');
+  console.log('--- Testing Official SportAPI RapidAPI Endpoints & Candidate Fallback ---');
   const originalFetch = global.fetch;
   const originalApiKey = process.env.RAPIDAPI_KEY;
   const originalHost = process.env.RAPIDAPI_SOFA_HOST;
@@ -328,36 +329,28 @@ console.log('--- Testing Aggregated Smart Polling for Concurrent Matches ---');
     delete process.env.RAPIDAPI_SOFA_HOST;
     setCachedWorkingEndpoint(null);
 
-    // Verify candidate lists
+    // Verify candidate lists for SportAPI
     const lastCandidates = getRapidApiCandidateEndpoints('last');
-    assert.strictEqual(lastCandidates[0], 'tournaments/get-events', 'Primary candidate must be /tournaments/get-events');
-    assert.ok(lastCandidates.includes('tournaments/get-events'));
+    assert.strictEqual(lastCandidates[0], 'api/v1/unique-tournament/984/season/65427/events/last/0');
+    assert.ok(lastCandidates.includes('api/v1/unique-tournament/984/season/65427/events/last/0'));
     assert.ok(!lastCandidates.includes('nativePassThrough'), 'Must not contain nativePassThrough');
-    assert.ok(!lastCandidates.includes('tournaments/get-last-matches'), 'Must not contain guessed legacy paths');
+    assert.ok(!lastCandidates.includes('tournaments/get-events'), 'Must not contain old non-SportAPI endpoints');
 
     const nextCandidates = getRapidApiCandidateEndpoints('next');
-    assert.strictEqual(nextCandidates[0], 'tournaments/get-events', 'Primary candidate must be /tournaments/get-events');
+    assert.strictEqual(nextCandidates[0], 'api/v1/unique-tournament/984/season/65427/events/next/0');
+    assert.ok(nextCandidates.includes('api/v1/unique-tournament/984/season/65427/events/next/0'));
     assert.ok(!nextCandidates.includes('nativePassThrough'), 'Must not contain nativePassThrough');
-    assert.ok(!nextCandidates.includes('tournaments/get-next-matches'), 'Must not contain guessed legacy paths');
 
-    // Simulate candidate fallback: candidate 1 (tournaments/get-events with tournamentId) returns 404,
-    // candidate 2 (tournaments/get-events with uniqueTournamentId) returns 200 with match events
+    // Simulate SportAPI response on /api/v1/unique-tournament/984/season/65427/events/last/0
     const calledUrls = [];
     const calledOptionsList = [];
 
-    const mockFetchWithFallback = async (url, options) => {
+    const mockFetchSportApi = async (url, options) => {
       calledUrls.push(url);
       calledOptionsList.push(options);
 
       const parsedUrl = new URL(url);
-      if (parsedUrl.pathname === '/tournaments/get-events' && parsedUrl.searchParams.has('tournamentId')) {
-        return {
-          ok: false,
-          status: 404,
-          statusText: 'Not Found'
-        };
-      }
-      if (parsedUrl.pathname === '/tournaments/get-events' && parsedUrl.searchParams.has('uniqueTournamentId')) {
+      if (parsedUrl.pathname === '/api/v1/unique-tournament/984/season/65427/events/last/0') {
         return {
           ok: true,
           status: 200,
@@ -385,52 +378,44 @@ console.log('--- Testing Aggregated Smart Polling for Concurrent Matches ---');
       seasonId: 65427,
       course: 'last',
       page: 0,
-      fetcher: mockFetchWithFallback
+      fetcher: mockFetchSportApi
     });
 
     const events = extractEventsFromResponse(res);
-    assert.strictEqual(events.length, 1, '1 event extracted from /tournaments/get-events response');
+    assert.strictEqual(events.length, 1, '1 event extracted from SportAPI response');
     assert.strictEqual(events[0].id, 5555);
 
-    // Verify 2 calls were made (first returned 404, fallback succeeded)
-    assert.strictEqual(calledUrls.length, 2, 'Fallback should try candidate 1 then candidate 2');
+    // Verify call was made to SportAPI
+    assert.strictEqual(calledUrls.length, 1);
 
     // Verify NO double slashes in constructed URLs
-    assert.ok(!calledUrls[0].includes('//tournaments'), 'Candidate 1 URL must have single slash');
-    assert.ok(!calledUrls[1].includes('//tournaments'), 'Candidate 2 URL must have single slash');
+    assert.ok(!calledUrls[0].includes('//api'), 'URL must have single slash');
+    assert.ok(!calledUrls[0].includes('//unique-tournament'), 'URL must have single slash');
 
     const url1 = new URL(calledUrls[0]);
-    assert.strictEqual(url1.hostname, 'sofascore-api6.p.rapidapi.com');
-    assert.strictEqual(url1.pathname, '/tournaments/get-events');
-    assert.strictEqual(url1.searchParams.get('tournamentId'), '984');
-    assert.strictEqual(url1.searchParams.get('seasonId'), '65427');
+    assert.strictEqual(url1.hostname, 'sportapi7.p.rapidapi.com');
+    assert.strictEqual(url1.pathname, '/api/v1/unique-tournament/984/season/65427/events/last/0');
 
-    const url2 = new URL(calledUrls[1]);
-    assert.strictEqual(url2.hostname, 'sofascore-api6.p.rapidapi.com');
-    assert.strictEqual(url2.pathname, '/tournaments/get-events');
-    assert.strictEqual(url2.searchParams.get('uniqueTournamentId'), '984');
-    assert.strictEqual(url2.searchParams.get('seasonId'), '65427');
-
-    // Verify RapidAPI headers
-    assert.strictEqual(calledOptionsList[1].headers['X-RapidAPI-Host'], 'sofascore-api6.p.rapidapi.com');
-    assert.strictEqual(calledOptionsList[1].headers['X-RapidAPI-Key'], 'test-rapidapi-key-12345');
+    // Verify RapidAPI headers for SportAPI
+    assert.strictEqual(calledOptionsList[0].headers['X-RapidAPI-Host'], 'sportapi7.p.rapidapi.com');
+    assert.strictEqual(calledOptionsList[0].headers['X-RapidAPI-Key'], 'test-rapidapi-key-12345');
 
     // Verify working endpoint was cached
-    assert.strictEqual(getCachedWorkingEndpoint(), 'tournaments/get-events');
+    assert.strictEqual(getCachedWorkingEndpoint(), 'api/v1/unique-tournament/984/season/65427/events/last/0');
 
-    // Subsequent call should use cached working endpoint immediately without 404
+    // Subsequent call should use cached working endpoint immediately
     calledUrls.length = 0;
     const res2 = await fetchTournamentEvents({
       tournamentId: 984,
       seasonId: 65427,
       course: 'last',
       page: 0,
-      fetcher: mockFetchWithFallback
+      fetcher: mockFetchSportApi
     });
     assert.strictEqual(calledUrls.length, 1, 'Subsequent call uses cached endpoint directly (1 call)');
-    assert.strictEqual(new URL(calledUrls[0]).pathname, '/tournaments/get-events');
+    assert.strictEqual(new URL(calledUrls[0]).pathname, '/api/v1/unique-tournament/984/season/65427/events/last/0');
 
-    console.log('✓ Dedicated RapidAPI tournament endpoints with candidate fallback passed successfully (zero double slashes)');
+    console.log('✓ Dedicated SportAPI tournament endpoints passed successfully (zero double slashes)');
   } finally {
     global.fetch = originalFetch;
     if (originalApiKey !== undefined) process.env.RAPIDAPI_KEY = originalApiKey;
