@@ -800,7 +800,9 @@ app.get(
               COUNT(*) FILTER (WHERE status IN ('TIMED', 'SCHEDULED') AND utc_date >= NOW() - INTERVAL '3 hours') AS upcoming_count,
               MAX(round_label) AS label
        FROM matches
-       WHERE competition_code = $1 AND round_key IS NOT NULL
+       WHERE competition_code = $1
+         AND round_key IS NOT NULL
+         AND (flashscore_id IS NOT NULL OR utc_date >= NOW() - INTERVAL '4 days')
        GROUP BY round_key
        ORDER BY MIN(utc_date) ASC`,
       [competition]
@@ -830,7 +832,9 @@ app.get(
               match_stats, match_incidents, match_lineups,
               (NOW() >= utc_date OR status NOT IN ('TIMED', 'SCHEDULED')) AS is_locked
        FROM matches
-       WHERE competition_code = $1 AND round_key = $2
+       WHERE competition_code = $1
+         AND round_key = $2
+         AND (flashscore_id IS NOT NULL OR utc_date >= NOW() - INTERVAL '4 days')
        ORDER BY utc_date ASC, id ASC`,
       [competition, roundKey]
     );
