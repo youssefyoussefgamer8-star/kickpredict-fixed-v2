@@ -3,300 +3,401 @@ require('dotenv').config();
 const { Pool } = require('pg');
 const { teamRatings, matchLambdas, buildMatchMarketsPoints } = require('./pricingEngine');
 
-// 365Scores Competition ID for Tunisian Ligue Professionnelle 1: 554
-const COMPETITION_ID = Number(process.env.TUNISIA_365SCORES_COMPETITION_ID || 554);
-const BASE_URL = 'https://webws.365scores.com/web/games';
+// Flashscore Raw Feed Endpoints & Config
+const FLASHSCORE_BASE_URL = 'https://local-global.flashscore.ninja/2/x/feed';
+const FLASHSCORE_FALLBACK_URL = 'https://46.flashscore.ninja/2/x/feed';
+const FLASHSCORE_IMAGE_BASE = 'https://static.flashscore.com/res/image/data';
 
-const DEFAULT_USER_AGENT =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
+// Mobile Dalvik headers to bypass Cloudflare protection and emulate native mobile app
+const FLASHSCORE_HEADERS = {
+  'x-fsign': 'SW9D1eZo',
+  'User-Agent': 'Dalvik/2.1.0 (Linux; U; Android 14; SM-S928B Build/UP1A.231005.007)',
+  'Accept': '*/*',
+  'Accept-Language': 'ar,en-US;q=0.9',
+  'Connection': 'keep-alive'
+};
+
+const BASE62_ALPHABET = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
 /**
- * Returns Cloudinary CDN URL for 365Scores competitor team crest.
+ * Reversibly converts an alphanumeric Flashscore Match ID (e.g. '4SrepIgn')
+ * into a 64-bit safe integer for PostgreSQL BIGINT external_id storage.
  */
-function get365ScoresCrest(competitorId) {
-  if (!competitorId) return null;
-  return `https://imagecache.365scores.com/image/upload/f_png,w_80,h_80,c_limit,q_auto:best/competitors/${competitorId}`;
+function flashscoreIdToBigInt(id) {
+  if (typeof id === 'number') return id;
+  if (!id || typeof id !== 'string') return 0;
+  if (/^\d+$/.test(id)) return Number(id);
+
+  let res = 0n;
+  for (let i = 0; i < id.length; i++) {
+    const idx = BASE62_ALPHABET.indexOf(id[i]);
+    if (idx !== -1) {
+      res = res * 62n + BigInt(idx);
+    }
+  }
+  return Number(res);
 }
 
 /**
- * Fetches games directly from 365Scores public web API (Arabic langId=27).
- * Types: 'current' (live & upcoming) or 'results' (recently finished)
+ * Reverts a BIGINT external_id back to its original Flashscore alphanumeric string.
  */
-async function fetch365ScoresGames(
-  endpointType = 'current',
-  { fetcher = fetch, langId = 27, competitionId = COMPETITION_ID } = {}
-) {
-  const url = `${BASE_URL}/${endpointType}/?appTypeId=5&langId=${langId}&timezoneName=Africa/Tunis&competitions=${competitionId}`;
-  const res = await fetcher(url, {
-    headers: {
-      'User-Agent': DEFAULT_USER_AGENT,
-      'Accept': 'application/json, text/plain, */*'
-    },
-    signal: AbortSignal.timeout(20000)
-  });
-
-  if (!res.ok) {
-    throw new Error(`365Scores HTTP ${res.status} (${res.statusText}) on ${endpointType}`);
+function bigIntToFlashscoreId(num) {
+  let n = BigInt(num);
+  if (n <= 0n) return '';
+  let str = '';
+  while (n > 0n) {
+    const rem = Number(n % 62n);
+    str = BASE62_ALPHABET[rem] + str;
+    n = n / 62n;
   }
-
-  const data = await res.json();
-  return Array.isArray(data?.games) ? data.games : [];
+  return str;
 }
 
 /**
- * Maps 365Scores game status and text to KickPredict internal status:
- *   - SCHEDULED
- *   - IN_PLAY
- *   - PAUSED
- *   - FINISHED
- *   - POSTPONED
- *   - CANCELLED
+ * Maps Flashscore team logos to public CDN URLs.
  */
-function map365ScoresStatus(game) {
-  if (!game) return 'SCHEDULED';
-
-  const group = Number(game.statusGroup ?? game.code);
-  const statusText = String(game.statusText || game.description || '').toLowerCase();
-  const shortText = String(game.shortStatusText || '').toLowerCase();
-  const type = String(game.type || '').toLowerCase();
-
-  // Check for postponed / cancelled textual keywords (Arabic & English)
-  if (
-    statusText.includes('تأجلت') ||
-    statusText.includes('تأجيل') ||
-    statusText.includes('postponed') ||
-    shortText.includes('تأجلت') ||
-    shortText.includes('postp') ||
-    type === 'postponed' ||
-    group === 60
-  ) {
-    return 'POSTPONED';
+function getFlashscoreCrest(logoFilename) {
+  if (!logoFilename || typeof logoFilename !== 'string' || !logoFilename.trim()) {
+    return null;
   }
+  const clean = logoFilename.trim();
+  if (clean.startsWith('http://') || clean.startsWith('https://')) {
+    return clean;
+  }
+  return `${FLASHSCORE_IMAGE_BASE}/${clean}`;
+}
 
-  if (
-    statusText.includes('ألغيت') ||
-    statusText.includes('إلغاء') ||
-    statusText.includes('cancelled') ||
-    statusText.includes('canceled') ||
-    shortText.includes('ألغيت') ||
-    type === 'canceled' ||
-    type === 'cancelled' ||
-    group === 70
-  ) {
+/**
+ * Dictionary mapping Latin team names to canonical Arabic team names.
+ */
+const TUNISIA_TEAMS_AR = {
+  'stade tunisien': 'الملعب التونسي',
+  'club africain': 'النادي الإفريقي',
+  'esperance tunis': 'الترجي الرياضي',
+  'esperance de tunis': 'الترجي الرياضي',
+  'esperance': 'الترجي الرياضي',
+  'etoile sahel': 'النجم الساحلي',
+  'etoile du sahel': 'النجم الساحلي',
+  'cs sfaxien': 'النادي الصفاقسي',
+  'sfaxien': 'النادي الصفاقسي',
+  'us monastir': 'الاتحاد المنستيري',
+  'monastir': 'الاتحاد المنستيري',
+  'es zarzis': 'الترجي الجرجيسي',
+  'zarzis': 'الترجي الجرجيسي',
+  'olympique beja': 'الأولمبي الباجي',
+  'beja': 'الأولمبي الباجي',
+  'ca bizertin': 'النادي البنزرتي',
+  'bizertin': 'النادي البنزرتي',
+  'us ben guerdane': 'اتحاد بن قردان',
+  'ben guerdane': 'اتحاد بن قردان',
+  'as soliman': 'مستقبل سليمان',
+  'soliman': 'مستقبل سليمان',
+  'egs gafsa': 'قوافل قفصة',
+  'gafsa': 'قوافل قفصة',
+  'js omrane': 'شبيبة العمران',
+  'omrane': 'شبيبة العمران',
+  'es metlaoui': 'نجم المتلوي',
+  'metlaoui': 'نجم المتلوي',
+  'us tataouine': 'اتحاد تطاوين',
+  'tataouine': 'اتحاد تطاوين',
+  'as gabes': 'مستقبل قابس',
+  'gabes': 'مستقبل قابس',
+  'cs hammam-lif': 'نادي حمام الأنف',
+  'hammam-lif': 'نادي حمام الأنف'
+};
+
+/**
+ * Formats a raw team name into Arabic.
+ */
+function formatTunisianTeam(rawName) {
+  if (!rawName) return 'فريق تونسي';
+  const clean = rawName.trim();
+  if (/[\u0600-\u06FF]/.test(clean)) return clean;
+  const lower = clean.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  for (const [latin, arabic] of Object.entries(TUNISIA_TEAMS_AR)) {
+    if (lower === latin || lower.includes(latin)) {
+      return arabic;
+    }
+  }
+  return clean;
+}
+
+/**
+ * Fetches raw feed from Flashscore mobile endpoints with fallback.
+ */
+async function fetchFlashscoreFeed(feedPath, { fetcher = fetch } = {}) {
+  const cleanPath = String(feedPath).replace(/^\/+/, '');
+  const urls = [
+    `${FLASHSCORE_BASE_URL}/${cleanPath}`,
+    `${FLASHSCORE_FALLBACK_URL}/${cleanPath}`
+  ];
+
+  let lastError = null;
+  for (const url of urls) {
+    try {
+      const res = await fetcher(url, {
+        headers: FLASHSCORE_HEADERS,
+        signal: AbortSignal.timeout(15000)
+      });
+      if (res.ok) {
+        return await res.text();
+      }
+      lastError = new Error(`Flashscore HTTP ${res.status} (${res.statusText}) on ${url}`);
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError || new Error(`Flashscore fetch failed for ${feedPath}`);
+}
+
+/**
+ * Parses Flashscore raw delimited feed into structured tournament and match objects.
+ */
+function parseFlashscoreFeed(rawText) {
+  if (!rawText || typeof rawText !== 'string') return [];
+  const tournaments = [];
+  const tournamentBlocks = rawText.split('~ZA÷').slice(1);
+
+  for (const block of tournamentBlocks) {
+    const matchBlocks = block.split('~AA÷');
+    const headerPart = matchBlocks[0];
+    const headerFields = {};
+    for (const item of headerPart.split('¬')) {
+      const idx = item.indexOf('÷');
+      if (idx !== -1) {
+        headerFields[item.slice(0, idx)] = item.slice(idx + 1);
+      }
+    }
+    const tournamentName = headerPart.split('¬')[0] || '';
+
+    const matches = [];
+    for (let i = 1; i < matchBlocks.length; i++) {
+      const mBlock = matchBlocks[i];
+      const mFields = {};
+      const pairs = mBlock.split('¬');
+      mFields.id = pairs[0].split('÷')[0];
+      for (const item of pairs) {
+        const idx = item.indexOf('÷');
+        if (idx !== -1) {
+          mFields[item.slice(0, idx)] = item.slice(idx + 1);
+        }
+      }
+      matches.push(mFields);
+    }
+
+    tournaments.push({
+      name: tournamentName,
+      country: headerFields.ZY || '',
+      tournamentId: headerFields.ZEE || '',
+      seasonId: headerFields.ZC || '',
+      url: headerFields.ZL || '',
+      logo: headerFields.OAJ || '',
+      matches
+    });
+  }
+  return tournaments;
+}
+
+/**
+ * Determines whether a tournament belongs to Tunisian Ligue 1.
+ */
+function isTunisianLigue1(t) {
+  const name = String(t.name || '').toLowerCase();
+  const country = String(t.country || '').toLowerCase();
+  const url = String(t.url || '').toLowerCase();
+
+  const isTunisia = country.includes('tunisia') || name.includes('tunisia') || name.includes('تونس') || url.includes('/tunisia/');
+  if (!isTunisia) return false;
+
+  const isL1 =
+    name.includes('ligue professionnelle 1') ||
+    name.includes('ligue 1') ||
+    name.includes('الرابطة الأولى') ||
+    name.includes('الرابطة المحترفة الأولى') ||
+    url.includes('ligue-professionnelle-1') ||
+    t.tournamentId === 'lfv2BGo7';
+
+  return isL1;
+}
+
+/**
+ * Maps Flashscore status codes (AB / AC) to internal KickPredict match status.
+ */
+function mapFlashscoreStatus(match) {
+  if (!match) return 'SCHEDULED';
+
+  const ab = String(match.AB ?? '').trim();
+  const ac = String(match.AC ?? '').trim();
+
+  // Cancelled checks
+  if (ac === '12' || ac === '13' || ac === '30' || match.type === 'canceled') {
     return 'CANCELLED';
   }
 
-  // Check for halftime / paused
-  if (
-    group === 1 ||
-    group === 7 ||
-    statusText.includes('استراحة') ||
-    statusText.includes('halftime') ||
-    shortText.includes('ht') ||
-    shortText.includes('استراحة')
-  ) {
+  // Postponed checks
+  if (ab === '4' || ac === '11' || ac === '10' || match.type === 'postponed') {
+    return 'POSTPONED';
+  }
+
+  // Halftime / Paused checks
+  if (ac === '17' || ac === '18' || ac === '19' || match.code === 7 || match.type === 'paused') {
     return 'PAUSED';
   }
 
-  // 365Scores statusGroup mapping
-  switch (group) {
-    case 1: // Halftime / Break ("استراحة")
-      return 'PAUSED';
-    case 2: // Not started ("لم تبدأ")
+  // Primary status
+  switch (ab) {
+    case '1':
       return 'SCHEDULED';
-    case 3: // In play / Live ("شوط 1", "شوط 2")
-      return 'IN_PLAY';
-    case 4: // Finished ("انتهت")
+    case '2':
+      return ac === '17' ? 'PAUSED' : 'IN_PLAY';
+    case '3':
       return 'FINISHED';
-    case 5: // Suspended / Cancelled / Postponed
+    case '4':
       return 'POSTPONED';
     default:
-      if (type === 'finished' || group === 100 || statusText.includes('انتهت') || statusText.includes('ended')) {
-        return 'FINISHED';
-      }
-      if (type === 'inprogress' || statusText.includes('شوط') || statusText.includes('live')) {
-        return 'IN_PLAY';
-      }
+      if (ac === '3' || match.code === 100 || match.type === 'finished') return 'FINISHED';
+      if (ac === '1' || ac === '2' || match.type === 'inprogress') return 'IN_PLAY';
       return 'SCHEDULED';
   }
 }
 
 /**
- * Extracts scores and half-time scores from 365Scores game objects.
- * Supports both full game objects and direct (homeScore, awayScore, status) parameters.
+ * Extracts scores and half-time scores from a Flashscore match.
  */
-function parse365ScoresScore(gameOrHomeScore, awayScoreOrStatus, statusParam) {
-  if (gameOrHomeScore === null || gameOrHomeScore === undefined) {
+function parseFlashscoreScore(matchOrHome, awayOrStatus, statusParam) {
+  if (matchOrHome === null || matchOrHome === undefined) {
     return { home: null, away: null, homeHt: null, awayHt: null };
   }
 
-  // Check if input is a 365Scores game object
-  if (typeof gameOrHomeScore === 'object' && ('homeCompetitor' in gameOrHomeScore || 'statusGroup' in gameOrHomeScore)) {
-    const game = gameOrHomeScore;
-    const status = awayScoreOrStatus || map365ScoresStatus(game);
+  // Flashscore match object
+  if (typeof matchOrHome === 'object' && ('id' in matchOrHome || 'AB' in matchOrHome || 'AE' in matchOrHome)) {
+    const m = matchOrHome;
+    const status = awayOrStatus || mapFlashscoreStatus(m);
     const isLiveOrFinished = status === 'IN_PLAY' || status === 'PAUSED' || status === 'FINISHED';
 
-    let homeScore = null;
-    let awayScore = null;
-
-    const rawHome = game.homeCompetitor?.score;
-    const rawAway = game.awayCompetitor?.score;
-
-    if (isLiveOrFinished) {
-      if (typeof rawHome === 'number' && rawHome >= 0) {
-        homeScore = rawHome;
-      }
-      if (typeof rawAway === 'number' && rawAway >= 0) {
-        awayScore = rawAway;
-      }
-    }
-
+    let home = null;
+    let away = null;
     let homeHt = null;
     let awayHt = null;
-    if (Array.isArray(game.stages)) {
-      const htStage = game.stages.find(
-        (s) => s.id === 7 || s.name === 'First Half' || s.name === 'شوط 1' || s.stageNum === 1
-      );
-      if (htStage) {
-        if (typeof htStage.homeCompetitorScore === 'number' && htStage.homeCompetitorScore >= 0) {
-          homeHt = htStage.homeCompetitorScore;
-        }
-        if (typeof htStage.awayCompetitorScore === 'number' && htStage.awayCompetitorScore >= 0) {
-          awayHt = htStage.awayCompetitorScore;
-        }
+
+    if (isLiveOrFinished) {
+      if (m.AG !== undefined && m.AG !== null && m.AG !== '') {
+        const parsed = parseInt(m.AG, 10);
+        if (!isNaN(parsed) && parsed >= 0) home = parsed;
+      }
+      if (m.AH !== undefined && m.AH !== null && m.AH !== '') {
+        const parsed = parseInt(m.AH, 10);
+        if (!isNaN(parsed) && parsed >= 0) away = parsed;
+      }
+      if (m.BA !== undefined && m.BA !== null && m.BA !== '') {
+        const parsed = parseInt(m.BA, 10);
+        if (!isNaN(parsed) && parsed >= 0) homeHt = parsed;
+      }
+      if (m.BB !== undefined && m.BB !== null && m.BB !== '') {
+        const parsed = parseInt(m.BB, 10);
+        if (!isNaN(parsed) && parsed >= 0) awayHt = parsed;
       }
     }
-
-    return { home: homeScore, away: awayScore, homeHt, awayHt };
+    return { home, away, homeHt, awayHt };
   }
 
-  // Handle direct (homeScore, awayScore, status) or SofaScore-like score object signatures
-  const homeArg = gameOrHomeScore;
-  const awayArg = awayScoreOrStatus;
+  // Numeric direct parameters: (homeScore, awayScore, status)
+  const homeArg = matchOrHome;
+  const awayArg = awayOrStatus;
   const status = statusParam;
   const isLiveOrFinished = status === 'IN_PLAY' || status === 'PAUSED' || status === 'FINISHED';
 
-  const extractVal = (arg) => {
-    if (typeof arg === 'number') return arg >= 0 ? arg : null;
-    if (arg && typeof arg === 'object') {
-      const val = arg.current ?? arg.display ?? arg.normaltime;
-      return typeof val === 'number' && val >= 0 ? val : null;
+  const extractNum = (val) => {
+    if (typeof val === 'number') return val >= 0 ? val : null;
+    if (typeof val === 'string' && val.trim() !== '') {
+      const p = parseInt(val, 10);
+      return !isNaN(p) && p >= 0 ? p : null;
+    }
+    if (val && typeof val === 'object') {
+      const p = val.current ?? val.display ?? val.score;
+      return typeof p === 'number' && p >= 0 ? p : null;
     }
     return null;
   };
 
-  const extractPeriod1 = (arg) => {
-    if (arg && typeof arg === 'object' && typeof arg.period1 === 'number' && arg.period1 >= 0) {
-      return arg.period1;
+  const extractPeriod1 = (val) => {
+    if (val && typeof val === 'object' && typeof val.period1 === 'number' && val.period1 >= 0) {
+      return val.period1;
     }
     return null;
   };
 
-  const home = isLiveOrFinished ? extractVal(homeArg) : null;
-  const away = isLiveOrFinished ? extractVal(awayArg) : null;
-  const homeHt = isLiveOrFinished ? extractPeriod1(homeArg) : null;
-  const awayHt = isLiveOrFinished ? extractPeriod1(awayArg) : null;
-
-  return { home, away, homeHt, awayHt };
+  return {
+    home: isLiveOrFinished ? extractNum(homeArg) : null,
+    away: isLiveOrFinished ? extractNum(awayArg) : null,
+    homeHt: isLiveOrFinished ? extractPeriod1(homeArg) : null,
+    awayHt: isLiveOrFinished ? extractPeriod1(awayArg) : null
+  };
 }
 
 /**
- * Extracts round and matchday information from a 365Scores game.
+ * Extracts round and matchday information from a Flashscore match.
  */
-function roundInfoFrom365Scores(game) {
-  const roundNum = Number(game?.roundNum ?? game?.roundInfo?.round);
-  if (Number.isInteger(roundNum) && roundNum > 0) {
-    const roundPrefix = (game?.roundName && String(game.roundName).trim()) || 'الجولة';
+function roundInfoFromFlashscore(match) {
+  const roundStr = String(match?.ER || match?.roundName || '').trim();
+  const matchNum = roundStr.match(/\d+/);
+  if (matchNum) {
+    const num = parseInt(matchNum[0], 10);
     return {
-      matchday: roundNum,
-      key: `MD:${roundNum}`,
-      label: `${roundPrefix} ${roundNum}`.trim()
+      matchday: num,
+      key: `MD:${num}`,
+      label: `الجولة ${num}`
     };
   }
 
-  const roundName = game?.roundName || game?.roundInfo?.name;
-  if (roundName && typeof roundName === 'string') {
-    return {
-      matchday: null,
-      key: roundName.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_'),
-      label: roundName.trim()
-    };
-  }
-
-  const stageNum = Number(game?.stageNum) || 1;
   return {
     matchday: null,
-    key: `STAGE_${stageNum}`,
-    label: 'الجولة'
+    key: 'REGULAR_SEASON',
+    label: roundStr || 'الجولة'
   };
 }
 
+// In-memory kick-off cache for scheduled fixtures
+let scheduledFixturesCache = [];
+
 /**
- * Full fixture schedule & Poisson ratings sync from 365Scores:
- * 1. Queries both 'current' and 'results' endpoints for Competition 554 in Arabic.
- * 2. Deduplicates matches by unique game id.
- * 3. Builds Poisson probability ratings from finished matches.
- * 4. Upserts matches into PostgreSQL matches table with native Arabic team names.
+ * Midnight Cron Job & Full Schedule Sync:
+ * Runs once a day at 00:00 (Africa/Tunis).
+ * Fetches the 4-day window (today + 3 days ahead: day 0, 1, 2, 3) from Flashscore raw feeds.
+ * Stores kick-off times and Poisson probabilities in database and memory.
+ * Makes ZERO subsequent requests to Flashscore until the next midnight or until live match window.
  */
-async function syncTunisianLeague(pool, { fetcher = fetch } = {}) {
-  console.log(`[Tunisia 365Scores] Fetching fixtures & results for Competition ID ${COMPETITION_ID}...`);
+async function syncTunisianLeague(pool, { fetcher = fetch, daysCount = 4 } = {}) {
+  console.log(`[Tunisia Flashscore] Running midnight fixture refresh for ${daysCount} days (today + 3 days)...`);
 
   try {
-    const [currentRes, resultsRes] = await Promise.allSettled([
-      fetch365ScoresGames('current', { fetcher }),
-      fetch365ScoresGames('results', { fetcher })
-    ]);
+    const allMatchesMap = new Map();
 
-    const currentGames = currentRes.status === 'fulfilled' ? currentRes.value : [];
-    const resultsGames = resultsRes.status === 'fulfilled' ? resultsRes.value : [];
+    // Fetch daily feeds for 4 consecutive days (0, 1, 2, 3)
+    for (let dayOffset = 0; dayOffset < daysCount; dayOffset++) {
+      try {
+        const feedText = await fetchFlashscoreFeed(`f_1_${dayOffset}_2_ar_1`, { fetcher });
+        const tournaments = parseFlashscoreFeed(feedText);
+        const l1Tournaments = tournaments.filter(isTunisianLigue1);
 
-    if (currentRes.status === 'rejected') {
-      console.warn('[Tunisia 365Scores] Current games fetch warning:', currentRes.reason?.message);
-    }
-    if (resultsRes.status === 'rejected') {
-      console.warn('[Tunisia 365Scores] Results games fetch warning:', resultsRes.reason?.message);
-    }
-
-    const gamesMap = new Map();
-    for (const g of resultsGames) {
-      if (g && g.id) gamesMap.set(g.id, g);
-    }
-    for (const g of currentGames) {
-      if (g && g.id) gamesMap.set(g.id, g);
+        for (const t of l1Tournaments) {
+          for (const m of t.matches) {
+            if (m.id && !allMatchesMap.has(m.id)) {
+              allMatchesMap.set(m.id, { ...m, tournamentName: t.name });
+            }
+          }
+        }
+      } catch (err) {
+        console.warn(`[Tunisia Flashscore] Failed fetching day offset +${dayOffset}:`, err.message);
+      }
     }
 
-    const allGames = Array.from(gamesMap.values());
-    console.log(
-      `[Tunisia 365Scores] Extracted ${resultsGames.length} finished/past games and ${currentGames.length} current/upcoming games (${allGames.length} unique).`
-    );
+    const matchesList = Array.from(allMatchesMap.values());
+    console.log(`[Tunisia Flashscore] Discovered ${matchesList.length} Tunisian Ligue 1 fixtures across ${daysCount} days.`);
 
-    if (allGames.length === 0) {
-      console.warn('[Tunisia 365Scores] No games returned from 365Scores API. Preserving existing database records.');
-      return;
-    }
-
-    // Build model ratings from finished games
-    const finishedForModel = allGames
-      .filter((g) => {
-        const st = map365ScoresStatus(g);
-        return (
-          st === 'FINISHED' &&
-          typeof g.homeCompetitor?.score === 'number' &&
-          g.homeCompetitor.score >= 0 &&
-          typeof g.awayCompetitor?.score === 'number' &&
-          g.awayCompetitor.score >= 0 &&
-          g.homeCompetitor?.id &&
-          g.awayCompetitor?.id
-        );
-      })
-      .map((g) => ({
-        homeId: Number(g.homeCompetitor.id),
-        awayId: Number(g.awayCompetitor.id),
-        homeGoals: Number(g.homeCompetitor.score),
-        awayGoals: Number(g.awayCompetitor.score)
-      }));
-
-    if (pool && finishedForModel.length < 4) {
+    // Build Poisson expected ratings from finished matches
+    const finishedForModel = [];
+    if (pool) {
       try {
         const { rows: dbFinished } = await pool.query(
           `SELECT home_score, away_score, external_id
@@ -315,119 +416,136 @@ async function syncTunisianLeague(pool, { fetcher = fetch } = {}) {
           });
         }
       } catch (err) {
-        // Fallback to internal model defaults if query fails
+        // fallback
       }
     }
 
     const model = teamRatings(finishedForModel);
-    console.log(`[Tunisia 365Scores] Calculated Poisson ratings from ${finishedForModel.length} finished fixtures.`);
-
     let updatedCount = 0;
-    for (const g of allGames) {
-      const extId = Number(g.id);
-      const homeTeam = g.homeCompetitor;
-      const awayTeam = g.awayCompetitor;
+    const newCache = [];
 
-      if (!Number.isSafeInteger(extId) || !homeTeam?.name || !awayTeam?.name || !g.startTime) {
+    for (const m of matchesList) {
+      const extId = flashscoreIdToBigInt(m.id);
+      if (!Number.isSafeInteger(extId) || !m.AE || !m.AF || !m.AD) {
         continue;
       }
 
-      const round = roundInfoFrom365Scores(g);
-      const status = map365ScoresStatus(g);
-      const scores = parse365ScoresScore(g, status);
-      const { lambdaHome, lambdaAway } = matchLambdas(Number(homeTeam.id), Number(awayTeam.id), model);
+      const kickoffSec = parseInt(m.AD, 10);
+      const kickoffIso = new Date(kickoffSec * 1000).toISOString();
+      const homeTeam = formatTunisianTeam(m.AE);
+      const awayTeam = formatTunisianTeam(m.AF);
+      const homeCrest = getFlashscoreCrest(m.OA);
+      const awayCrest = getFlashscoreCrest(m.OB);
+      const status = mapFlashscoreStatus(m);
+      const scores = parseFlashscoreScore(m, status);
+      const round = roundInfoFromFlashscore(m);
+
+      const homeIdNum = m.PX ? flashscoreIdToBigInt(m.PX) : extId;
+      const awayIdNum = m.PY ? flashscoreIdToBigInt(m.PY) : extId + 1;
+      const { lambdaHome, lambdaAway } = matchLambdas(homeIdNum, awayIdNum, model);
       const markets = buildMatchMarketsPoints(lambdaHome, lambdaAway);
-      const kickoff = new Date(g.startTime).toISOString();
 
-      const homeCrest = get365ScoresCrest(homeTeam.id);
-      const awayCrest = get365ScoresCrest(awayTeam.id);
+      newCache.push({
+        id: extId,
+        rawId: m.id,
+        kickoff: kickoffIso,
+        status,
+        homeTeam,
+        awayTeam
+      });
 
-      await pool.query(
-        `INSERT INTO matches (
-           external_id, competition_code, stage, matchday, round_key, round_label,
-           home_team, home_crest, away_team, away_crest, utc_date, status,
-           home_score, away_score, home_ht, away_ht, home_lambda, away_lambda,
-           markets_points, updated_at
-         ) VALUES (
-           $1, 'TUN', 'REGULAR_SEASON', $2, $3, $4,
-           $5, $6, $7, $8, $9, $10,
-           $11, $12, $13, $14, $15, $16, $17::jsonb, NOW()
-         )
-         ON CONFLICT (external_id) DO UPDATE SET
-           competition_code = 'TUN',
-           stage = EXCLUDED.stage,
-           matchday = EXCLUDED.matchday,
-           round_key = EXCLUDED.round_key,
-           round_label = EXCLUDED.round_label,
-           home_team = EXCLUDED.home_team,
-           home_crest = COALESCE(EXCLUDED.home_crest, matches.home_crest),
-           away_team = EXCLUDED.away_team,
-           away_crest = COALESCE(EXCLUDED.away_crest, matches.away_crest),
-           utc_date = CASE WHEN matches.points_calculated THEN matches.utc_date ELSE EXCLUDED.utc_date END,
-           status = CASE
-             WHEN matches.points_calculated AND matches.utc_date < NOW() - INTERVAL '48 hours' THEN matches.status
-             WHEN matches.points_calculated AND (EXCLUDED.status != 'FINISHED' OR EXCLUDED.home_score IS NULL OR EXCLUDED.away_score IS NULL) THEN matches.status
-             ELSE EXCLUDED.status
-           END,
-           home_score = CASE
-             WHEN matches.points_calculated AND matches.utc_date < NOW() - INTERVAL '48 hours' THEN matches.home_score
-             WHEN matches.points_calculated AND (EXCLUDED.status != 'FINISHED' OR EXCLUDED.home_score IS NULL OR EXCLUDED.away_score IS NULL) THEN matches.home_score
-             ELSE EXCLUDED.home_score
-           END,
-           away_score = CASE
-             WHEN matches.points_calculated AND matches.utc_date < NOW() - INTERVAL '48 hours' THEN matches.away_score
-             WHEN matches.points_calculated AND (EXCLUDED.status != 'FINISHED' OR EXCLUDED.home_score IS NULL OR EXCLUDED.away_score IS NULL) THEN matches.away_score
-             ELSE EXCLUDED.away_score
-           END,
-           home_ht = CASE WHEN matches.points_calculated THEN matches.home_ht ELSE EXCLUDED.home_ht END,
-           away_ht = CASE WHEN matches.points_calculated THEN matches.away_ht ELSE EXCLUDED.away_ht END,
-           home_lambda = CASE WHEN EXCLUDED.status IN ('TIMED', 'SCHEDULED') THEN EXCLUDED.home_lambda ELSE matches.home_lambda END,
-           away_lambda = CASE WHEN EXCLUDED.status IN ('TIMED', 'SCHEDULED') THEN EXCLUDED.away_lambda ELSE matches.away_lambda END,
-           markets_points = CASE
-             WHEN matches.points_calculated THEN matches.markets_points
-             WHEN EXCLUDED.status IN ('TIMED', 'SCHEDULED') AND matches.odds_source = 'bookmaker' THEN matches.markets_points
-             WHEN EXCLUDED.status IN ('TIMED', 'SCHEDULED') THEN EXCLUDED.markets_points
-             ELSE COALESCE(matches.markets_points, EXCLUDED.markets_points)
-           END,
-           updated_at = NOW()`,
-        [
-          extId,
-          round.matchday,
-          round.key,
-          round.label,
-          homeTeam.name || homeTeam.symbolicName,
-          homeCrest,
-          awayTeam.name || awayTeam.symbolicName,
-          awayCrest,
-          kickoff,
-          status,
-          scores.home,
-          scores.away,
-          scores.homeHt,
-          scores.awayHt,
-          lambdaHome,
-          lambdaAway,
-          JSON.stringify(markets)
-        ]
-      );
-      updatedCount++;
+      if (pool) {
+        await pool.query(
+          `INSERT INTO matches (
+             external_id, competition_code, stage, matchday, round_key, round_label,
+             home_team, home_crest, away_team, away_crest, utc_date, status,
+             home_score, away_score, home_ht, away_ht, home_lambda, away_lambda,
+             markets_points, updated_at
+           ) VALUES (
+             $1, 'TUN', 'REGULAR_SEASON', $2, $3, $4,
+             $5, $6, $7, $8, $9, $10,
+             $11, $12, $13, $14, $15, $16, $17::jsonb, NOW()
+           )
+           ON CONFLICT (external_id) DO UPDATE SET
+             competition_code = 'TUN',
+             stage = EXCLUDED.stage,
+             matchday = EXCLUDED.matchday,
+             round_key = EXCLUDED.round_key,
+             round_label = EXCLUDED.round_label,
+             home_team = EXCLUDED.home_team,
+             home_crest = COALESCE(EXCLUDED.home_crest, matches.home_crest),
+             away_team = EXCLUDED.away_team,
+             away_crest = COALESCE(EXCLUDED.away_crest, matches.away_crest),
+             utc_date = CASE WHEN matches.points_calculated THEN matches.utc_date ELSE EXCLUDED.utc_date END,
+             status = CASE
+               WHEN matches.points_calculated AND matches.utc_date < NOW() - INTERVAL '48 hours' THEN matches.status
+               WHEN matches.points_calculated AND (EXCLUDED.status != 'FINISHED' OR EXCLUDED.home_score IS NULL OR EXCLUDED.away_score IS NULL) THEN matches.status
+               ELSE EXCLUDED.status
+             END,
+             home_score = CASE
+               WHEN matches.points_calculated AND matches.utc_date < NOW() - INTERVAL '48 hours' THEN matches.home_score
+               WHEN matches.points_calculated AND (EXCLUDED.status != 'FINISHED' OR EXCLUDED.home_score IS NULL OR EXCLUDED.away_score IS NULL) THEN matches.home_score
+               ELSE EXCLUDED.home_score
+             END,
+             away_score = CASE
+               WHEN matches.points_calculated AND matches.utc_date < NOW() - INTERVAL '48 hours' THEN matches.away_score
+               WHEN matches.points_calculated AND (EXCLUDED.status != 'FINISHED' OR EXCLUDED.home_score IS NULL OR EXCLUDED.away_score IS NULL) THEN matches.away_score
+               ELSE EXCLUDED.away_score
+             END,
+             home_ht = CASE WHEN matches.points_calculated THEN matches.home_ht ELSE EXCLUDED.home_ht END,
+             away_ht = CASE WHEN matches.points_calculated THEN matches.away_ht ELSE EXCLUDED.away_ht END,
+             home_lambda = CASE WHEN EXCLUDED.status IN ('TIMED', 'SCHEDULED') THEN EXCLUDED.home_lambda ELSE matches.home_lambda END,
+             away_lambda = CASE WHEN EXCLUDED.status IN ('TIMED', 'SCHEDULED') THEN EXCLUDED.away_lambda ELSE matches.away_lambda END,
+             markets_points = CASE
+               WHEN matches.points_calculated THEN matches.markets_points
+               WHEN EXCLUDED.status IN ('TIMED', 'SCHEDULED') AND matches.odds_source = 'bookmaker' THEN matches.markets_points
+               WHEN EXCLUDED.status IN ('TIMED', 'SCHEDULED') THEN EXCLUDED.markets_points
+               ELSE COALESCE(matches.markets_points, EXCLUDED.markets_points)
+             END,
+             updated_at = NOW()`,
+          [
+            extId,
+            round.matchday,
+            round.key,
+            round.label,
+            homeTeam,
+            homeCrest,
+            awayTeam,
+            awayCrest,
+            kickoffIso,
+            status,
+            scores.home,
+            scores.away,
+            scores.homeHt,
+            scores.awayHt,
+            lambdaHome,
+            lambdaAway,
+            JSON.stringify(markets)
+          ]
+        );
+        updatedCount++;
+      }
     }
-    console.log(`[Tunisia 365Scores] Processed ${updatedCount} fixtures from 365Scores into PostgreSQL.`);
+
+    scheduledFixturesCache = newCache;
+    console.log(
+      `[Tunisia Flashscore] Midnight sync completed: saved ${updatedCount} fixtures in database & memory. No further network calls needed until live windows.`
+    );
+    return matchesList;
   } catch (err) {
-    console.error('[Tunisia 365Scores] Schedule sync error:', err.message);
+    console.error('[Tunisia Flashscore] Midnight sync error:', err.message);
+    return [];
   }
 }
 
 let smartPollRunning = false;
 
 /**
- * Smart Polling for Tunisian League live matches:
- * Runs every 2 minutes, BUT checks the database first:
- * - Only queries 365Scores if there is an active match (IN_PLAY, PAUSED)
- *   OR a match scheduled within the active window (kickoff - 10m to kickoff + 135m).
- * - If no active matches exist, 0 HTTP requests are made.
- * - When active matches exist, sends EXACTLY ONE aggregated batch query to 365Scores 'current'
- *   updating all concurrent fixtures simultaneously.
+ * Just-in-Time Live Polling:
+ * Runs every 2 minutes with a STRICT Gate Condition:
+ * 1. Checks if any scheduled match is currently live (NOW >= kickoff and not finished yet).
+ * 2. If NO live match is playing: outputs 'Idling: No live matches' and makes 0 HTTP requests.
+ * 3. If a live match is in progress: fetches Flashscore Day 0 raw feed to update live scores and events.
  */
 async function smartPollTunisia(
   pool,
@@ -437,7 +555,7 @@ async function smartPollTunisia(
   smartPollRunning = true;
 
   try {
-    // 1. Check database for active or upcoming Tunisian matches
+    // 1. Strict Gate Condition: Are there any scheduled matches currently playing?
     const { rows: activeMatches } = await pool.query(
       `SELECT id, external_id, home_team, away_team, utc_date, status, home_score, away_score,
               home_ht, away_ht, points_calculated
@@ -447,48 +565,50 @@ async function smartPollTunisia(
            status IN ('IN_PLAY', 'PAUSED')
            OR (
              status IN ('TIMED', 'SCHEDULED')
-             AND utc_date <= NOW() + INTERVAL '10 minutes'
+             AND utc_date <= NOW()
              AND utc_date >= NOW() - INTERVAL '135 minutes'
            )
          )
        ORDER BY utc_date ASC`
     );
 
-    // If no matches are live or kicking off, stop immediately without making any HTTP calls!
+    // Gate check: If no matches are live, IDLE immediately with 0 network calls!
     if (activeMatches.length === 0) {
+      console.log('[Tunisia Flashscore Smart Polling] Idling: No live matches');
       return;
     }
 
     console.log(
-      `[Tunisia 365Scores Smart Polling] Detected ${activeMatches.length} active/upcoming matches. Executing single aggregated batch query...`
+      `[Tunisia Flashscore Smart Polling] Detected ${activeMatches.length} live/active matches in progress. Querying Flashscore live feed...`
     );
 
-    const currentGames = await fetch365ScoresGames('current', { fetcher });
+    // 2. Fetch live updates from Flashscore Day 0 raw feed
+    const feedText = await fetchFlashscoreFeed('f_1_0_2_ar_1', { fetcher });
+    const tournaments = parseFlashscoreFeed(feedText);
 
-    if (!currentGames.length) {
-      console.log('[Tunisia 365Scores Smart Polling] 0 games returned from current endpoint.');
-      return;
-    }
-
-    // Index all games by external_id (as string & number for robust matching)
-    const gamesMap = new Map();
-    for (const g of currentGames) {
-      if (g && g.id !== undefined && g.id !== null) {
-        gamesMap.set(String(g.id), g);
-        gamesMap.set(Number(g.id), g);
+    // Index all matches from today's feed by BIGINT and raw string ID
+    const feedMatchesMap = new Map();
+    for (const t of tournaments) {
+      for (const m of t.matches) {
+        if (m.id) {
+          const bigIntId = flashscoreIdToBigInt(m.id);
+          feedMatchesMap.set(bigIntId, m);
+          feedMatchesMap.set(m.id, m);
+        }
       }
     }
 
     const updatedMatchRows = [];
 
-    // Process all active matches in memory from the single batch response
+    // Process all active matches in memory from the single response
     for (const match of activeMatches) {
       try {
-        const g = gamesMap.get(String(match.external_id)) || gamesMap.get(Number(match.external_id));
-        if (!g) continue;
+        const bigIntId = Number(match.external_id);
+        const m = feedMatchesMap.get(bigIntId) || feedMatchesMap.get(match.external_id);
+        if (!m) continue;
 
-        const newStatus = map365ScoresStatus(g);
-        const scores = parse365ScoresScore(g, newStatus);
+        const newStatus = mapFlashscoreStatus(m);
+        const scores = parseFlashscoreScore(m, newStatus);
 
         const statusChanged = match.status !== newStatus;
         const scoreChanged =
@@ -519,12 +639,12 @@ async function smartPollTunisia(
           });
         }
       } catch (err) {
-        console.error(`[Tunisia 365Scores Smart Polling] Failed updating match ${match.external_id}:`, err.message);
+        console.error(`[Tunisia Flashscore Smart Polling] Failed updating match ${match.external_id}:`, err.message);
       }
     }
 
     if (updatedMatchRows.length > 0) {
-      console.log(`[Tunisia 365Scores Smart Polling] Updated ${updatedMatchRows.length} Tunisian matches in batch.`);
+      console.log(`[Tunisia Flashscore Smart Polling] Updated ${updatedMatchRows.length} Tunisian matches in batch.`);
       if (typeof reconcileScoreCorrections === 'function') {
         await reconcileScoreCorrections(updatedMatchRows);
       }
@@ -533,14 +653,14 @@ async function smartPollTunisia(
       }
     }
   } catch (err) {
-    console.error('[Tunisia 365Scores Smart Polling] Batch polling error:', err.message);
+    console.error('[Tunisia Flashscore Smart Polling] Batch polling error:', err.message);
   } finally {
     smartPollRunning = false;
   }
 }
 
 /**
- * Purges legacy or obsolete Tunisian matches from PostgreSQL.
+ * Purges legacy Tunisian matches from PostgreSQL.
  */
 async function purgeLegacyTunisiaMatches(pool) {
   try {
@@ -555,52 +675,55 @@ async function purgeLegacyTunisiaMatches(pool) {
          OR competition_code ILIKE '%TUN%';
     `);
     if (res.rowCount > 0 || boostRes.rowCount > 0) {
-      console.log(`[Tunisia 365Scores] Purged ${res.rowCount} legacy Tunisian matches and ${boostRes.rowCount} boosts from PostgreSQL.`);
+      console.log(`[Tunisia Flashscore] Purged ${res.rowCount} legacy Tunisian matches and ${boostRes.rowCount} boosts from PostgreSQL.`);
     }
     return { deletedMatches: res.rowCount, deletedBoosts: boostRes.rowCount };
   } catch (err) {
-    console.warn('[Tunisia 365Scores] Purge query warning:', err.message);
+    console.warn('[Tunisia Flashscore] Purge query warning:', err.message);
     return { deletedMatches: 0, deletedBoosts: 0 };
   }
 }
 
 /**
- * Initializes Tunisia background synchronization via 365Scores:
- * 1. Purges legacy records and runs full schedule sync on boot.
- * 2. Schedules daily full sync at 06:00 UTC.
- * 3. Schedules smart polling every 2 minutes.
+ * Initializes Tunisia background synchronization via Flashscore:
+ * 1. Runs full 4-day fixture schedule sync on boot.
+ * 2. Schedules Midnight Cron Job at 00:00 (Africa/Tunis time).
+ * 3. Schedules Just-in-Time smart polling every 2 minutes with strict gate condition.
  */
 function initTunisiaSync({ pool, cron, settleFinishedMatches, reconcileScoreCorrections }) {
   console.log(
-    `[Tunisia 365Scores] Initialized provider for Competition ID ${COMPETITION_ID} (Public 365Scores API, Arabic langId=27, zero API keys required).`
+    `[Tunisia Flashscore] Initialized Flashscore Raw Feed provider (Midnight 4-day schedule + Just-In-Time 2m live polling).`
   );
 
-  // 1. Initial schedule sync on startup
+  // 1. Initial 4-day schedule sync on startup
   (async () => {
     try {
-      await purgeLegacyTunisiaMatches(pool);
       await syncTunisianLeague(pool);
     } catch (err) {
-      console.error('[Tunisia 365Scores] Initial startup sync error:', err.message);
+      console.error('[Tunisia Flashscore] Startup sync error:', err.message);
     }
   })();
 
-  // 2. Daily schedule sync at 06:00 UTC
-  cron.schedule('0 6 * * *', () => {
-    console.log('[Tunisia 365Scores] Running scheduled daily fixture refresh...');
-    syncTunisianLeague(pool).catch((err) => {
-      console.error('[Tunisia 365Scores] Daily refresh error:', err.message);
-    });
-  });
+  // 2. Midnight Cron Job at 00:00 Africa/Tunis time
+  cron.schedule(
+    '0 0 * * *',
+    () => {
+      console.log('[Tunisia Flashscore] Midnight cron triggered: refreshing 4-day fixtures schedule...');
+      syncTunisianLeague(pool).catch((err) => {
+        console.error('[Tunisia Flashscore] Midnight refresh error:', err.message);
+      });
+    },
+    { timezone: 'Africa/Tunis' }
+  );
 
-  // 3. Smart polling every 2 minutes
+  // 3. Just-In-Time Smart Polling every 2 minutes
   cron.schedule('*/2 * * * *', () => {
     smartPollTunisia(pool, { settleFinishedMatches, reconcileScoreCorrections }).catch((err) => {
-      console.error('[Tunisia 365Scores Smart Polling] Scheduled cycle error:', err.message);
+      console.error('[Tunisia Flashscore Smart Polling] Scheduled cycle error:', err.message);
     });
   });
 
-  console.log('[Tunisia 365Scores] Smart polling scheduled (every 2m with conditional database gate).');
+  console.log('[Tunisia Flashscore] Midnight cron (00:00 Africa/Tunis) & Just-in-Time 2m polling active.');
 }
 
 module.exports = {
@@ -608,17 +731,25 @@ module.exports = {
   smartPollTunisia,
   initTunisiaSync,
   purgeLegacyTunisiaMatches,
-  fetch365ScoresGames,
-  map365ScoresStatus,
-  parse365ScoresScore,
-  roundInfoFrom365Scores,
-  get365ScoresCrest,
-  COMPETITION_ID,
-  BASE_URL,
-  // Aliases for backwards compatibility
-  mapSofaScoreStatus: map365ScoresStatus,
-  parseSofaScoreScore: parse365ScoresScore,
-  roundInfoFromSofaScore: roundInfoFrom365Scores
+  fetchFlashscoreFeed,
+  parseFlashscoreFeed,
+  flashscoreIdToBigInt,
+  bigIntToFlashscoreId,
+  mapFlashscoreStatus,
+  parseFlashscoreScore,
+  roundInfoFromFlashscore,
+  getFlashscoreCrest,
+  formatTunisianTeam,
+  isTunisianLigue1,
+  FLASHSCORE_BASE_URL,
+  FLASHSCORE_FALLBACK_URL,
+  // Backwards compatibility aliases
+  map365ScoresStatus: mapFlashscoreStatus,
+  parse365ScoresScore: parseFlashscoreScore,
+  roundInfoFrom365Scores: roundInfoFromFlashscore,
+  mapSofaScoreStatus: mapFlashscoreStatus,
+  parseSofaScoreScore: parseFlashscoreScore,
+  roundInfoFromSofaScore: roundInfoFromFlashscore
 };
 
 // Standalone execution support: node sync-tunisia.js
@@ -626,7 +757,7 @@ if (require.main === module) {
   const cliPool = new Pool({ connectionString: process.env.DATABASE_URL, max: 2 });
   syncTunisianLeague(cliPool)
     .catch((error) => {
-      console.error('[Tunisia 365Scores] Failed:', error.message);
+      console.error('[Tunisia Flashscore] Failed:', error.message);
       process.exitCode = 1;
     })
     .finally(async () => {
