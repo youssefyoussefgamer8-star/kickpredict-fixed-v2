@@ -1,14 +1,14 @@
 import React, { useState } from 'react';
 
 const LEAGUE_LOGOS = {
-  PL: 'https://images.fotmob.com/image_resources/logo/leaguelogo/47.png',
-  PD: 'https://images.fotmob.com/image_resources/logo/leaguelogo/87.png',
-  BL1: 'https://images.fotmob.com/image_resources/logo/leaguelogo/54.png',
-  SA: 'https://images.fotmob.com/image_resources/logo/leaguelogo/55.png',
-  FL1: 'https://images.fotmob.com/image_resources/logo/leaguelogo/53.png',
-  CL: 'https://images.fotmob.com/image_resources/logo/leaguelogo/42.png',
-  TUN: 'https://images.fotmob.com/image_resources/logo/leaguelogo/544.png',
-  TU1: 'https://images.fotmob.com/image_resources/logo/leaguelogo/544.png'
+  PL: 'https://crests.football-data.org/PL.png',
+  PD: 'https://crests.football-data.org/PD.png',
+  BL1: 'https://crests.football-data.org/BL1.png',
+  SA: 'https://crests.football-data.org/SA.png',
+  FL1: 'https://crests.football-data.org/FL1.png',
+  CL: 'https://crests.football-data.org/CL.png',
+  TUN: 'https://imagecache.365scores.com/image/upload/f_png,w_120,h_120,c_limit,q_auto:good/v1/Competitions/554',
+  TU1: 'https://imagecache.365scores.com/image/upload/f_png,w_120,h_120,c_limit,q_auto:good/v1/Competitions/554'
 };
 
 const LEAGUE_FALLBACK_ICONS = {
