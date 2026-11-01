@@ -165,27 +165,129 @@ const MASTER_CRESTS = {
   'Sporting CP': 'https://crests.football-data.org/498.png',
   'Viking': 'https://crests.football-data.org/2202.png',
 
-  // Tunisian Ligue 1 (Official 365Scores Verified CDNs)
-  'الترجي الرياضي': 'https://imagecache.365scores.com/image/upload/f_png,w_120,h_120,c_limit,q_auto:eco/v1/Competitors/8234',
-  'النادي الإفريقي': 'https://imagecache.365scores.com/image/upload/f_png,w_120,h_120,c_limit,q_auto:eco/v1/Competitors/8235',
-  'النجم الساحلي': 'https://imagecache.365scores.com/image/upload/f_png,w_120,h_120,c_limit,q_auto:eco/v1/Competitors/8236',
-  'النادي الصفاقسي': 'https://imagecache.365scores.com/image/upload/f_png,w_120,h_120,c_limit,q_auto:eco/v1/Competitors/8232',
-  'الملعب التونسي': 'https://imagecache.365scores.com/image/upload/f_png,w_120,h_120,c_limit,q_auto:eco/v1/Competitors/8233',
-  'الاتحاد المنستيري': 'https://imagecache.365scores.com/image/upload/f_png,w_120,h_120,c_limit,q_auto:eco/v1/Competitors/8244',
-  'اتحاد بن قردان': 'https://imagecache.365scores.com/image/upload/f_png,w_120,h_120,c_limit,q_auto:eco/v1/Competitors/14329',
-  'النادي البنزرتي': 'https://imagecache.365scores.com/image/upload/f_png,w_120,h_120,c_limit,q_auto:eco/v1/Competitors/8231',
-  'الترجي الجرجيسي': 'https://imagecache.365scores.com/image/upload/f_png,w_120,h_120,c_limit,q_auto:eco/v1/Competitors/8238',
-  'شبيبة العمران': 'https://imagecache.365scores.com/image/upload/f_png,w_120,h_120,c_limit,q_auto:eco/v1/Competitors/72896',
-  'مستقبل المرسى': 'https://imagecache.365scores.com/image/upload/f_png,w_120,h_120,c_limit,q_auto:eco/v1/Competitors/8230',
-  'نادي حمام الأنف': 'https://imagecache.365scores.com/image/upload/f_png,w_120,h_120,c_limit,q_auto:eco/v1/Competitors/8240',
-  'الأولمبي الباجي': 'https://imagecache.365scores.com/image/upload/f_png,w_120,h_120,c_limit,q_auto:eco/v1/Competitors/8237',
-  'نجم المتلوي': 'https://imagecache.365scores.com/image/upload/f_png,w_120,h_120,c_limit,q_auto:eco/v1/Competitors/8241',
-  'أمل حمام سوسة': 'https://imagecache.365scores.com/image/upload/f_png,w_120,h_120,c_limit,q_auto:eco/v1/Competitors/8242',
-  'تقدم ساقية الدائر': 'https://imagecache.365scores.com/image/upload/f_png,w_120,h_120,c_limit,q_auto:eco/v1/Competitors/46043',
-  'قوافل قفصة': 'https://imagecache.365scores.com/image/upload/f_png,w_120,h_120,c_limit,q_auto:eco/v1/Competitors/8239',
-  'مستقبل سليمان': 'https://imagecache.365scores.com/image/upload/f_png,w_120,h_120,c_limit,q_auto:eco/v1/Competitors/60904',
-  'مستقبل قابس': 'https://imagecache.365scores.com/image/upload/f_png,w_120,h_120,c_limit,q_auto:eco/v1/Competitors/8243',
-  'اتحاد تطاوين': 'https://imagecache.365scores.com/image/upload/f_png,w_120,h_120,c_limit,q_auto:eco/v1/Competitors/15291'
+  // Tunisian Ligue 1 (Official 365Scores Verified HD 256x256 PNGs)
+  // 1. الترجي الرياضي التونسي (Esperance Sportive de Tunis) - ID: 8235
+  'الترجي الرياضي': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8235',
+  'الترجي': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8235',
+  'الترجي التونسي': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8235',
+  'Esperance Tunis': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8235',
+  'Esperance de Tunis': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8235',
+  'ES Tunis': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8235',
+
+  // 2. النادي الإفريقي (Club Africain) - ID: 8239
+  'النادي الإفريقي': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8239',
+  'النادي الافريقي': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8239',
+  'الإفريقي': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8239',
+  'الافريقي': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8239',
+  'Club Africain': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8239',
+
+  // 3. النجم الساحلي (Etoile Sportive du Sahel) - ID: 8241
+  'النجم الساحلي': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8241',
+  'النجم الرياضي الساحلي': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8241',
+  'Etoile Sahel': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8241',
+  'Etoile du Sahel': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8241',
+  'ES Sahel': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8241',
+
+  // 4. النادي الصفاقسي (Club Sportif Sfaxien) - ID: 8232
+  'النادي الصفاقسي': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8232',
+  'الصفاقسي': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8232',
+  'CS Sfaxien': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8232',
+
+  // 5. الملعب التونسي (Stade Tunisien) - ID: 8233
+  'الملعب التونسي': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8233',
+  'Stade Tunisien': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8233',
+
+  // 6. الاتحاد المنستيري (US Monastir) - ID: 8769
+  'الاتحاد المنستيري': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8769',
+  'الاتحاد الرياضي المنستيري': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8769',
+  'اتحاد المنستير': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8769',
+  'US Monastir': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8769',
+  'Monastir': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8769',
+
+  // 7. النادي البنزرتي (Club Athletique Bizertin) - ID: 8231
+  'النادي البنزرتي': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8231',
+  'البنزرتي': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8231',
+  'CA Bizertin': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8231',
+  'Bizertin': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8231',
+
+  // 8. الترجي الجرجيسي (ES Zarzis) - ID: 8236
+  'الترجي الجرجيسي': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8236',
+  'ترجي جرجيس': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8236',
+  'ES Zarzis': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8236',
+  'Zarzis': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8236',
+
+  // 9. الأولمبي الباجي (Olympique Beja) - ID: 8237
+  'الأولمبي الباجي': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8237',
+  'الاولمبي الباجي': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8237',
+  'Olympique Beja': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8237',
+  'Beja': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8237',
+
+  // 10. نجم المتلوي (ES Metlaoui) - ID: 14068
+  'نجم المتلوي': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/14068',
+  'النجم الرياضي بالمتلوي': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/14068',
+  'ES Metlaoui': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/14068',
+  'Metlaoui': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/14068',
+
+  // 11. اتحاد بن قردان (US Ben Guerdane) - ID: 14329
+  'اتحاد بن قردان': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/14329',
+  'الاتحاد الرياضي ببن قردان': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/14329',
+  'US Ben Guerdane': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/14329',
+  'Ben Guerdane': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/14329',
+
+  // 12. شبيبة العمران (JS Omrane) - ID: 72896
+  'شبيبة العمران': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/72896',
+  'الشبيبة الرياضية بالعمران': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/72896',
+  'JS Omrane': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/72896',
+  'Omrane': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/72896',
+
+  // 13. مستقبل قابس (AS Gabes) - ID: 8234
+  'مستقبل قابس': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8234',
+  'المستقبل الرياضي بقابس': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8234',
+  'AS Gabes': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8234',
+  'Gabes': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8234',
+
+  // 14. قوافل قفصة (EGS Gafsa) - ID: 8229
+  'قوافل قفصة': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8229',
+  'القوافل الرياضية بقفصة': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8229',
+  'EGS Gafsa': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8229',
+  'Gafsa': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8229',
+
+  // 15. مستقبل سليمان (AS Soliman) - ID: 50316
+  'مستقبل سليمان': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/50316',
+  'المستقبل الرياضي بسليمان': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/50316',
+  'AS Soliman': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/50316',
+  'Soliman': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/50316',
+
+  // 16. اتحاد تطاوين (US Tataouine) - ID: 27712
+  'اتحاد تطاوين': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/27712',
+  'الاتحاد الرياضي بتطاوين': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/27712',
+  'الإتحاد الرياضي بتطاوين': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/27712',
+  'US Tataouine': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/27712',
+  'Tataouine': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/27712',
+
+  // 17. مستقبل المرسى (AS Marsa) - ID: 8230
+  'مستقبل المرسى': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8230',
+  'المستقبل الرياضي بالمرسى': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8230',
+  'AS Marsa': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8230',
+  'Marsa': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8230',
+
+  // 18. نادي حمام الأنف (CS Hammam-Lif) - ID: 8240
+  'نادي حمام الأنف': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8240',
+  'النادي الرياضي لحمام الأنف': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8240',
+  'CS Hammam-Lif': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8240',
+  'Hammam-Lif': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8240',
+
+  // 19. أمل حمام سوسة (ES Hammam Sousse) - ID: 8242
+  'أمل حمام سوسة': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8242',
+  'الأمل الرياضي بحمام سوسة': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8242',
+  'ES Hammam Sousse': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8242',
+
+  // 20. تقدم ساقية الدائر (Progress Sakiet Eddaier) - ID: 46043
+  'تقدم ساقية الدائر': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/46043',
+  'التقدم الرياضي بساقية الداير': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/46043',
+  'تقدم ساقية الداير': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/46043',
+  'Progress Sakiet Eddaier': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/46043',
+  'Sakiet Eddaier': 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/46043'
 };
 
 module.exports = { MASTER_CRESTS };

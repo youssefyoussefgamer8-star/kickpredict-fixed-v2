@@ -90,7 +90,9 @@ assert.strictEqual(formatTunisianTeam('Club Africain'), 'النادي الإفر
 assert.strictEqual(formatTunisianTeam('Étoile du Sahel'), 'النجم الساحلي');
 assert.strictEqual(getFlashscoreCrest('logo.png'), 'https://static.flashscore.com/res/image/data/logo.png');
 assert.strictEqual(getFlashscoreCrest('any-logo.png', 'Arsenal'), 'https://crests.football-data.org/57.png');
-assert.strictEqual(getFlashscoreCrest(null, 'الترجي الرياضي'), 'https://imagecache.365scores.com/image/upload/f_png,w_120,h_120,c_limit,q_auto:eco/v1/Competitors/8234');
+assert.strictEqual(getFlashscoreCrest(null, 'الترجي الرياضي'), 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8235');
+assert.strictEqual(getFlashscoreCrest(null, 'النادي الإفريقي'), 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8239');
+assert.strictEqual(getFlashscoreCrest(null, 'النجم الساحلي'), 'https://imagecache.365scores.com/image/upload/f_png,w_256,h_256,c_limit,q_auto:good/v1/Competitors/8241');
 console.log('✓ Team names and crests verified');
 
 console.log('--- Testing Status and Score Mapping ---');
