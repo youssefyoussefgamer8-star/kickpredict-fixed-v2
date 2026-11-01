@@ -69,7 +69,12 @@ assert.strictEqual(extractEventsFromResponse({ matches: [{ id: 102 }] }).length,
 assert.strictEqual(extractEventsFromResponse({ data: { events: [{ id: 103 }] } }).length, 1);
 assert.strictEqual(extractEventsFromResponse({ data: [{ id: 104 }] }).length, 1);
 assert.strictEqual(extractEventsFromResponse([{ id: 105 }]).length, 1);
+assert.strictEqual(extractEventsFromResponse({ events: [{ event: { id: 106, homeTeam: { name: 'EST' } } }] }).length, 1);
+assert.strictEqual(extractEventsFromResponse({ rounds: [{ events: [{ id: 107 }] }] }).length, 1);
+assert.strictEqual(extractEventsFromResponse({ fixtures: [{ id: 108 }] }).length, 1);
+assert.strictEqual(extractEventsFromResponse({ customList: [{ matchId: 109, home_team: 'CA' }] }).length, 1);
 assert.strictEqual(extractEventsFromResponse(null).length, 0);
+assert.strictEqual(extractEventsFromResponse({}).length, 0);
 console.log('✓ Event extraction across multiple RapidAPI vendor response formats passed');
 
 console.log('--- Testing Round Info Extraction ---');
@@ -139,16 +144,45 @@ console.log('✓ Poisson pricing engine integration test passed successfully!');
 
 console.log('--- Testing Aggregated Smart Polling for Concurrent Matches ---');
 (async () => {
-  console.log('--- Testing Season Query Bypass ---');
+  console.log('--- Testing Season Discovery & Fallback ---');
+  setCachedSeasonId(65427);
   let seasonsFetchCalled = 0;
   const mockSeasonFetcher = async () => {
     seasonsFetchCalled++;
     return { seasons: [] };
   };
   const seasonIdResult = await getActiveSeasonId(mockSeasonFetcher);
-  assert.strictEqual(seasonIdResult, 65427, 'Uses fixed season ID 65427');
-  assert.strictEqual(seasonsFetchCalled, 0, 'Zero network calls made for seasons discovery');
-  console.log('✓ Season discovery network query completely bypassed');
+  assert.strictEqual(seasonIdResult, 65427, 'Uses fixed season ID 65427 when cached');
+  assert.strictEqual(seasonsFetchCalled, 0, 'Zero network calls made when cached');
+
+  // Test dynamic discovery from RapidAPI when uncached
+  const prevApiKey = process.env.RAPIDAPI_KEY;
+  try {
+    process.env.RAPIDAPI_KEY = 'test-key';
+    setCachedSeasonId(null);
+    delete process.env.TUNISIA_SOFASCORE_SEASON_ID;
+    let discoveryCalled = 0;
+    const mockDiscoveryFetcher = async () => {
+      discoveryCalled++;
+      return {
+        ok: true,
+        json: async () => ({
+          seasons: [
+            { id: 65427, year: '25/26', name: 'Ligue 1 25/26' },
+            { id: 61627, year: '24/25', name: 'Ligue 1 24/25' }
+          ]
+        })
+      };
+    };
+    const discoveredId = await getActiveSeasonId(mockDiscoveryFetcher);
+    assert.strictEqual(discoveredId, 65427);
+    assert.ok(discoveryCalled > 0, 'Discovers season from RapidAPI when uncached');
+    console.log('✓ Season discovery and fallback verified successfully');
+  } finally {
+    if (prevApiKey !== undefined) process.env.RAPIDAPI_KEY = prevApiKey;
+    else delete process.env.RAPIDAPI_KEY;
+    setCachedSeasonId(65427);
+  }
 
   console.log('--- Testing PostgreSQL Legacy Tunisia Purge ---');
   const deletedSqls = [];

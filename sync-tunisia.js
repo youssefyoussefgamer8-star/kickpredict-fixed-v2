@@ -56,7 +56,7 @@ function sanitizePath(p) {
 /**
  * Candidate official endpoints on RapidAPI for tournament match fixtures/results
  */
-function getRapidApiCandidateEndpoints(course = 'last') {
+function getRapidApiCandidateEndpoints(course = 'last', tournamentId = TOURNAMENT_ID, seasonId = 65427, page = 0) {
   if (process.env.RAPIDAPI_SOFA_ENDPOINT) {
     return [sanitizePath(process.env.RAPIDAPI_SOFA_ENDPOINT)];
   }
@@ -67,7 +67,11 @@ function getRapidApiCandidateEndpoints(course = 'last') {
       'tournaments/get-schedule',
       'tournaments/get-matches',
       'tournaments/events',
-      `unique-tournament/${TOURNAMENT_ID}/season/events/last`
+      'tournament/get-last-matches',
+      'unique-tournaments/get-last-matches',
+      `unique-tournament/${tournamentId}/season/${seasonId}/events/last/${page}`,
+      `unique-tournament/${tournamentId}/season/${seasonId}/events/last`,
+      `api/v1/unique-tournament/${tournamentId}/season/${seasonId}/events/last/${page}`
     ];
   } else {
     return [
@@ -76,7 +80,11 @@ function getRapidApiCandidateEndpoints(course = 'last') {
       'tournaments/get-events',
       'tournaments/get-matches',
       'tournaments/events',
-      `unique-tournament/${TOURNAMENT_ID}/season/events/next`
+      'tournament/get-next-matches',
+      'unique-tournaments/get-next-matches',
+      `unique-tournament/${tournamentId}/season/${seasonId}/events/next/${page}`,
+      `unique-tournament/${tournamentId}/season/${seasonId}/events/next`,
+      `api/v1/unique-tournament/${tournamentId}/season/${seasonId}/events/next/${page}`
     ];
   }
 }
@@ -162,7 +170,7 @@ async function fetchTournamentEvents({
     return sofaFetch(directPath);
   }
 
-  const candidateList = getRapidApiCandidateEndpoints(course);
+  const candidateList = getRapidApiCandidateEndpoints(course, tournamentId, seasonId, page);
   const candidates = cachedWorkingEndpoint
     ? [cachedWorkingEndpoint, ...candidateList.filter((e) => e !== cachedWorkingEndpoint)]
     : candidateList;
@@ -175,10 +183,15 @@ async function fetchTournamentEvents({
     const url = new URL(`https://${host}/${cleanEndpoint}`);
     url.searchParams.set('tournamentId', String(tournamentId));
     url.searchParams.set('tournament_id', String(tournamentId));
+    url.searchParams.set('uniqueTournamentId', String(tournamentId));
+    url.searchParams.set('unique_tournament_id', String(tournamentId));
+    url.searchParams.set('id', String(tournamentId));
     url.searchParams.set('seasonId', String(seasonId));
     url.searchParams.set('season_id', String(seasonId));
     url.searchParams.set('course_events', course);
+    url.searchParams.set('course', course);
     url.searchParams.set('page', String(page));
+    url.searchParams.set('pageIndex', String(page));
 
     const options = {
       headers: {
@@ -190,15 +203,20 @@ async function fetchTournamentEvents({
     };
 
     try {
+      console.log(`[Tunisia SofaScore] Querying candidate: https://${host}/${cleanEndpoint}?${url.searchParams.toString()}`);
       const res = await fetcher(url.toString(), options);
       if (res.status === 404) {
+        console.warn(`[Tunisia SofaScore] Candidate /${cleanEndpoint} returned 404 Not Found.`);
         lastError = new Error(`RapidAPI endpoint /${cleanEndpoint} returned 404`);
         continue;
       }
       if (!res.ok) {
+        console.error(`[Tunisia SofaScore] Candidate /${cleanEndpoint} returned HTTP ${res.status} (${res.statusText})`);
         throw new Error(`RapidAPI HTTP ${res.status} (${res.statusText}) on /${cleanEndpoint}`);
       }
       const data = await res.json();
+      console.log(`[Tunisia SofaScore] RapidAPI /${cleanEndpoint} succeeded (HTTP 200).`);
+      console.log(`[Tunisia SofaScore] Raw JSON payload:`, JSON.stringify(data).slice(0, 4000));
       cachedWorkingEndpoint = cleanEndpoint;
       return data;
     } catch (err) {
@@ -214,18 +232,77 @@ async function fetchTournamentEvents({
 }
 
 /**
+ * Unwraps single event items from vendor structures
+ */
+function unwrapEventsArray(arr) {
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .map((item) => (item?.event && typeof item.event === 'object' ? item.event : item))
+    .filter((item) => item && typeof item === 'object');
+}
+
+/**
  * Robustly extracts match/event array from any RapidAPI vendor structure
  */
 function extractEventsFromResponse(data) {
   if (!data) return [];
-  if (Array.isArray(data)) return data;
-  if (Array.isArray(data.events)) return data.events;
-  if (Array.isArray(data.matches)) return data.matches;
-  if (Array.isArray(data.data?.events)) return data.data.events;
-  if (Array.isArray(data.data?.matches)) return data.data.matches;
-  if (Array.isArray(data.data)) return data.data;
-  if (Array.isArray(data.results)) return data.results;
-  if (Array.isArray(data.response)) return data.response;
+  if (Array.isArray(data)) return unwrapEventsArray(data);
+
+  // Common direct array containers across RapidAPI sports wrappers
+  const directCandidates = [
+    data.events,
+    data.matches,
+    data.fixtures,
+    data.schedule,
+    data.items,
+    data.results,
+    data.result,
+    data.response,
+    data.data?.events,
+    data.data?.matches,
+    data.data?.fixtures,
+    data.data?.schedule,
+    data.data?.items,
+    data.data?.results,
+    data.data?.result,
+    data.data,
+    data.response?.events,
+    data.response?.matches
+  ];
+
+  for (const candidate of directCandidates) {
+    if (Array.isArray(candidate) && candidate.length > 0) {
+      return unwrapEventsArray(candidate);
+    }
+  }
+
+  // Check if events are grouped inside rounds / stages
+  if (Array.isArray(data.rounds)) {
+    const flat = data.rounds.flatMap((r) => Array.isArray(r.events) ? r.events : (Array.isArray(r.matches) ? r.matches : []));
+    if (flat.length > 0) return unwrapEventsArray(flat);
+  }
+  if (Array.isArray(data.data?.rounds)) {
+    const flat = data.data.rounds.flatMap((r) => Array.isArray(r.events) ? r.events : (Array.isArray(r.matches) ? r.matches : []));
+    if (flat.length > 0) return unwrapEventsArray(flat);
+  }
+
+  // Generic fallback: scan all object properties for any array of match-like items
+  const searchRoots = [data, data.data, data.response, data.result].filter((r) => r && typeof r === 'object');
+  for (const root of searchRoots) {
+    for (const val of Object.values(root)) {
+      if (Array.isArray(val) && val.length > 0) {
+        const sample = val[0];
+        if (
+          sample &&
+          typeof sample === 'object' &&
+          (sample.id || sample.matchId || sample.external_id || sample.homeTeam || sample.home_team || sample.startTimestamp)
+        ) {
+          return unwrapEventsArray(val);
+        }
+      }
+    }
+  }
+
   return [];
 }
 
@@ -323,16 +400,83 @@ function roundInfoFromSofaScore(event) {
 
 /**
  * Resolves active SofaScore season ID for tournament 984.
- * Uses fixed season ID (65427) directly, bypassing all network calls
- * to save API requests and prevent 404 errors.
+ * First checks TUNISIA_SOFASCORE_SEASON_ID env var or cachedSeasonId.
+ * If not preset, attempts discovering active seasons from RapidAPI and logs raw payload.
+ * Safely defaults to 65427.
  */
-async function getActiveSeasonId(_fetcher = null) {
-  return cachedSeasonId || Number(process.env.TUNISIA_SOFASCORE_SEASON_ID || 65427);
+async function getActiveSeasonId(fetcher = sofaFetch) {
+  if (cachedSeasonId) return cachedSeasonId;
+  if (process.env.TUNISIA_SOFASCORE_SEASON_ID) {
+    cachedSeasonId = Number(process.env.TUNISIA_SOFASCORE_SEASON_ID);
+    console.log(`[Tunisia SofaScore] Using TUNISIA_SOFASCORE_SEASON_ID env var: ${cachedSeasonId}`);
+    return cachedSeasonId;
+  }
+
+  const isRapidApi = Boolean(process.env.RAPIDAPI_KEY && process.env.RAPIDAPI_KEY.trim());
+  if (isRapidApi) {
+    const seasonCandidates = [
+      'tournaments/get-seasons',
+      'tournaments/seasons',
+      'tournament/get-seasons',
+      `unique-tournament/${TOURNAMENT_ID}/seasons`,
+      `api/v1/unique-tournament/${TOURNAMENT_ID}/seasons`
+    ];
+
+    const host = RAPIDAPI_HOST.replace(/\/+$/, '');
+    for (const ep of seasonCandidates) {
+      try {
+        const cleanEp = sanitizePath(ep);
+        const url = new URL(`https://${host}/${cleanEp}`);
+        url.searchParams.set('tournamentId', String(TOURNAMENT_ID));
+        url.searchParams.set('tournament_id', String(TOURNAMENT_ID));
+        url.searchParams.set('id', String(TOURNAMENT_ID));
+
+        const res = await (fetcher === sofaFetch ? fetch : fetcher)(url.toString(), {
+          headers: {
+            'X-RapidAPI-Key': process.env.RAPIDAPI_KEY.trim(),
+            'X-RapidAPI-Host': host,
+            'Accept': 'application/json'
+          },
+          signal: AbortSignal.timeout(15000)
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          console.log(`[Tunisia SofaScore] Raw Seasons JSON from RapidAPI /${cleanEp}:`, JSON.stringify(data).slice(0, 2000));
+          const seasons = Array.isArray(data?.seasons)
+            ? data.seasons
+            : (Array.isArray(data?.data?.seasons)
+              ? data.data.seasons
+              : (Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])));
+
+          if (seasons.length > 0) {
+            let selectedSeason = seasons[0];
+            if (process.env.TUNISIA_SEASON) {
+              const target = String(process.env.TUNISIA_SEASON).trim();
+              const matched = seasons.find((s) => String(s.year || s.name || '').includes(target));
+              if (matched) selectedSeason = matched;
+            }
+            cachedSeasonId = Number(selectedSeason.id);
+            console.log(
+              `[Tunisia SofaScore] Discovered Season from RapidAPI: ${selectedSeason.name || selectedSeason.year} (ID: ${cachedSeasonId})`
+            );
+            return cachedSeasonId;
+          }
+        }
+      } catch (err) {
+        // Fall back gracefully
+      }
+    }
+  }
+
+  cachedSeasonId = 65427;
+  console.log(`[Tunisia SofaScore] Using preset season ID: ${cachedSeasonId}`);
+  return cachedSeasonId;
 }
 
 /**
  * Full fixture schedule & Poisson ratings sync from SofaScore:
- * 1. Uses preset season ID (65427) directly (seasons lookup bypassed).
+ * 1. Resolves active season ID (verified via RapidAPI or preset 65427).
  * 2. Fetches recent finished fixtures (course: 'last') and upcoming fixtures (course: 'next').
  * 3. Builds Poisson expected-goals ratings.
  * 4. Inserts/updates matches table with 'TUN' competition code.
@@ -340,9 +484,9 @@ async function getActiveSeasonId(_fetcher = null) {
 async function syncTunisianLeague(pool) {
   try {
     const isRapidApi = Boolean(process.env.RAPIDAPI_KEY && process.env.RAPIDAPI_KEY.trim());
-    const seasonId = cachedSeasonId || Number(process.env.TUNISIA_SOFASCORE_SEASON_ID || 65427);
+    const seasonId = await getActiveSeasonId();
     console.log(
-      `[Tunisia SofaScore] Direct sync for Tournament ID ${TOURNAMENT_ID}, Season ID ${seasonId} (mode: ${isRapidApi ? 'RapidAPI Gateway' : 'Direct / Proxy'}, seasons query bypassed).`
+      `[Tunisia SofaScore] Syncing Tournament ID ${TOURNAMENT_ID}, Season ID ${seasonId} (mode: ${isRapidApi ? 'RapidAPI Gateway' : 'Direct / Proxy'}).`
     );
 
     // Fetch finished fixtures and upcoming scheduled fixtures via dedicated official tournament endpoints
@@ -351,12 +495,28 @@ async function syncTunisianLeague(pool) {
       fetchTournamentEvents({ tournamentId: TOURNAMENT_ID, seasonId, course: 'next', page: 0 })
     ]);
 
+    if (lastRes.status === 'fulfilled') {
+      console.log(`[Tunisia SofaScore] Raw response for 'last':`, JSON.stringify(lastRes.value).slice(0, 3000));
+    } else {
+      console.error(`[Tunisia SofaScore] Fetch 'last' failed:`, lastRes.reason?.message);
+    }
+
+    if (nextRes.status === 'fulfilled') {
+      console.log(`[Tunisia SofaScore] Raw response for 'next':`, JSON.stringify(nextRes.value).slice(0, 3000));
+    } else {
+      console.error(`[Tunisia SofaScore] Fetch 'next' failed:`, nextRes.reason?.message);
+    }
+
     const finishedEvents = lastRes.status === 'fulfilled'
       ? extractEventsFromResponse(lastRes.value)
       : [];
     const upcomingEvents = nextRes.status === 'fulfilled'
       ? extractEventsFromResponse(nextRes.value)
       : [];
+
+    console.log(
+      `[Tunisia SofaScore] Extracted ${finishedEvents.length} finished events and ${upcomingEvents.length} upcoming events.`
+    );
 
     // Deduplicate events by event ID
     const eventsMap = new Map();
@@ -367,7 +527,13 @@ async function syncTunisianLeague(pool) {
     const allEvents = Array.from(eventsMap.values());
 
     if (!allEvents.length) {
-      console.warn('[Tunisia SofaScore] No events returned. Preserving existing database records.');
+      console.warn('[Tunisia SofaScore] No events returned from candidate endpoints. Preserving existing database records.');
+      if (lastRes.status === 'fulfilled') {
+        console.warn('[Tunisia SofaScore] lastRes payload keys:', Object.keys(lastRes.value || {}));
+      }
+      if (nextRes.status === 'fulfilled') {
+        console.warn('[Tunisia SofaScore] nextRes payload keys:', Object.keys(nextRes.value || {}));
+      }
       return;
     }
 
