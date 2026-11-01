@@ -561,15 +561,24 @@ function parseFlashscoreLineups(rawText) {
       const pRating = fields.LPR ? fields.LPR.trim() : null;
       const pId = fields.LP ? fields.LP.trim() : null;
 
+      const pEvents = [];
+      if (fields.LIN) {
+        const linLower = fields.LIN.toLowerCase();
+        if (linLower.includes('yellow')) pEvents.push({ type: 'yellow_card', minute: fields.LIT || '' });
+        else if (linLower.includes('red')) pEvents.push({ type: 'red_card', minute: fields.LIT || '' });
+        else if (linLower.includes('goal')) pEvents.push({ type: 'goal', minute: fields.LIT || '' });
+        else if (fields.LII === '6' || linLower.includes('substitut')) pEvents.push({ type: 'sub', minute: fields.LIT || '' });
+      }
+
       if (currentSection === 'coaches') {
         if (currentTeam === 1) managerHome = pName;
         else managerAway = pName;
       } else if (currentSection === 'subs') {
-        const subObj = { id: pId, name: pName, num: pNum, photo: pPhoto, rating: pRating, pos: 'SUB' };
+        const subObj = { id: pId, name: pName, num: pNum, photo: pPhoto, rating: pRating, pos: 'SUB', events: pEvents };
         if (currentTeam === 1) subsHome.push(subObj);
         else subsAway.push(subObj);
       } else {
-        const playerObj = { id: pId, name: pName, num: pNum, photo: pPhoto, rating: pRating, pos: 'PL' };
+        const playerObj = { id: pId, name: pName, num: pNum, photo: pPhoto, rating: pRating, pos: 'PL', events: pEvents };
         if (!hasExplicitSections) {
           if (startingHome.length < 11) startingHome.push(playerObj);
           else startingAway.push(playerObj);
@@ -630,10 +639,55 @@ async function fetchMatchLiveDetails(matchRawId, { fetcher = fetch } = {}) {
     fetchFlashscoreFeed(`df_li_1_${matchRawId}`, { fetcher })
   ]);
 
+  const stats = stText.status === 'fulfilled' ? parseFlashscoreStats(stText.value) : [];
+  const incidents = suiText.status === 'fulfilled' ? parseFlashscoreIncidents(suiText.value) : [];
+  let lineups = liText.status === 'fulfilled' ? parseFlashscoreLineups(liText.value) : null;
+
+  // Cross-reference and attach incidents (goals, assists, cards, substitutions) to player profiles
+  if (lineups && incidents.length > 0) {
+    const matchPlayer = (p, inc) => {
+      if (!p?.name || !inc?.player) return false;
+      const pClean = p.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const incClean = inc.player.toLowerCase().replace(/[^a-z0-9]/g, '');
+      return pClean === incClean || pClean.includes(incClean) || incClean.includes(pClean);
+    };
+
+    const enrichList = (list) => {
+      return list.map((p) => {
+        const existing = Array.isArray(p.events) ? [...p.events] : [];
+        for (const inc of incidents) {
+          if (matchPlayer(p, inc)) {
+            const t = (inc.type || '').toLowerCase();
+            let evType = null;
+            if (t.includes('goal') && !t.includes('own goal')) evType = 'goal';
+            else if (t.includes('own goal')) evType = 'own_goal';
+            else if (t.includes('assist')) evType = 'assist';
+            else if (t.includes('yellow')) evType = 'yellow_card';
+            else if (t.includes('red')) evType = 'red_card';
+            else if (t.includes('substitut')) evType = 'sub';
+
+            if (evType && !existing.some((e) => e.type === evType && e.minute === inc.minute)) {
+              existing.push({ type: evType, minute: inc.minute, detail: inc.detail });
+            }
+          }
+        }
+        return { ...p, events: existing };
+      });
+    };
+
+    lineups = {
+      ...lineups,
+      startingHome: enrichList(lineups.startingHome),
+      startingAway: enrichList(lineups.startingAway),
+      subsHome: enrichList(lineups.subsHome),
+      subsAway: enrichList(lineups.subsAway)
+    };
+  }
+
   return {
-    stats: stText.status === 'fulfilled' ? parseFlashscoreStats(stText.value) : [],
-    incidents: suiText.status === 'fulfilled' ? parseFlashscoreIncidents(suiText.value) : [],
-    lineups: liText.status === 'fulfilled' ? parseFlashscoreLineups(liText.value) : null
+    stats,
+    incidents,
+    lineups
   };
 }
 
