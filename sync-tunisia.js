@@ -3,531 +3,344 @@ require('dotenv').config();
 const { Pool } = require('pg');
 const { teamRatings, matchLambdas, buildMatchMarketsPoints } = require('./pricingEngine');
 
-// SofaScore Unique Tournament ID for Tunisian Ligue Professionnelle 1: 984
-const TOURNAMENT_ID = Number(process.env.SOFASCORE_TOURNAMENT_ID || 984);
-const RAPIDAPI_KEY = (process.env.RAPIDAPI_KEY || '').trim();
-const RAPIDAPI_HOST = (process.env.RAPIDAPI_SOFA_HOST || 'sportapi7.p.rapidapi.com').trim();
-const DIRECT_BASE_URL = (process.env.SOFASCORE_BASE_URL || 'https://api.sofascore.com/api/v1').replace(/\/+$/, '');
+// 365Scores Competition ID for Tunisian Ligue Professionnelle 1: 554
+const COMPETITION_ID = Number(process.env.TUNISIA_365SCORES_COMPETITION_ID || 554);
+const BASE_URL = 'https://webws.365scores.com/web/games';
 
-let cachedSeasonId = process.env.TUNISIA_SOFASCORE_SEASON_ID
-  ? Number(process.env.TUNISIA_SOFASCORE_SEASON_ID)
-  : 65427;
+const DEFAULT_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
 
-// Pool of modern desktop & mobile User-Agents to randomize request signatures
-const USER_AGENTS = [
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15',
-  'Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36',
-  'Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1'
-];
-
-function getRandomUserAgent() {
-  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
-}
-
-let proxyDispatcher = null;
-const proxyUrl = process.env.SOFA_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
-if (proxyUrl) {
-  try {
-    const { ProxyAgent } = require('undici');
-    proxyDispatcher = new ProxyAgent(proxyUrl);
-    console.log(`[Tunisia SofaScore] Proxy gateway initialized: ${proxyUrl.replace(/:\/\/[^:]+:[^@]+@/, '://***:***@')}`);
-  } catch (err) {
-    console.warn('[Tunisia SofaScore] Proxy initialization warning:', err.message);
-  }
+/**
+ * Returns Cloudinary CDN URL for 365Scores competitor team crest.
+ */
+function get365ScoresCrest(competitorId) {
+  if (!competitorId) return null;
+  return `https://imagecache.365scores.com/image/upload/f_png,w_80,h_80,c_limit,q_auto:best/competitors/${competitorId}`;
 }
 
 /**
- * Sanitizes and cleans API paths to prevent redundant slashes (//)
+ * Fetches games directly from 365Scores public web API (Arabic langId=27).
+ * Types: 'current' (live & upcoming) or 'results' (recently finished)
  */
-function sanitizePath(p) {
-  if (!p) return '';
-  return String(p)
-    .trim()
-    .replace(/^\/+/, '')
-    .replace(/\/+$/, '')
-    .replace(/\/+/g, '/');
-}
+async function fetch365ScoresGames(
+  endpointType = 'current',
+  { fetcher = fetch, langId = 27, competitionId = COMPETITION_ID } = {}
+) {
+  const url = `${BASE_URL}/${endpointType}/?appTypeId=5&langId=${langId}&timezoneName=Africa/Tunis&competitions=${competitionId}`;
+  const res = await fetcher(url, {
+    headers: {
+      'User-Agent': DEFAULT_USER_AGENT,
+      'Accept': 'application/json, text/plain, */*'
+    },
+    signal: AbortSignal.timeout(20000)
+  });
 
-/**
- * SportAPI official endpoints for tournament match fixtures/results mirroring SofaScore native paths:
- *   /api/v1/unique-tournament/{tournamentId}/season/{seasonId}/events/{course}/{page}
- */
-function getRapidApiCandidateEndpoints(course = 'last', tournamentId = TOURNAMENT_ID, seasonId = 65427, page = 0) {
-  if (process.env.RAPIDAPI_SOFA_ENDPOINT) {
-    return [sanitizePath(process.env.RAPIDAPI_SOFA_ENDPOINT)];
-  }
-  return [
-    `api/v1/unique-tournament/${tournamentId}/season/${seasonId}/events/${course}/${page}`,
-    `unique-tournament/${tournamentId}/season/${seasonId}/events/${course}/${page}`
-  ];
-}
-
-let cachedWorkingEndpoint = null;
-
-/**
- * Universal SofaScore Fetcher for raw endpoints (direct or proxy route)
- */
-async function sofaFetch(path, params = {}) {
-  const isRapidApi = Boolean(process.env.RAPIDAPI_KEY && process.env.RAPIDAPI_KEY.trim());
-
-  let url;
-  let headers;
-
-  const cleanPath = sanitizePath(path);
-
-  if (isRapidApi) {
-    const host = RAPIDAPI_HOST.replace(/\/+$/, '');
-    const fullPath = cleanPath.startsWith('api/v1') ? cleanPath : `api/v1/${cleanPath}`;
-    url = new URL(`https://${host}/${fullPath}`);
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
-    }
-    headers = {
-      'X-RapidAPI-Key': process.env.RAPIDAPI_KEY.trim(),
-      'X-RapidAPI-Host': host,
-      'Accept': 'application/json'
-    };
-  } else {
-    const base = DIRECT_BASE_URL.replace(/\/+$/, '');
-    const directPath = cleanPath.replace(/^api\/v1\/?/, '');
-    url = new URL(`${base}/${directPath}`);
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
-    }
-    headers = {
-      'User-Agent': getRandomUserAgent(),
-      'Accept': 'application/json, text/plain, */*',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Referer': 'https://www.sofascore.com/',
-      'Origin': 'https://www.sofascore.com',
-      'Sec-Fetch-Dest': 'empty',
-      'Sec-Fetch-Mode': 'cors',
-      'Sec-Fetch-Site': 'same-origin',
-      'Cache-Control': 'max-age=0'
-    };
-  }
-
-  const options = {
-    headers,
-    signal: AbortSignal.timeout(25000)
-  };
-  if (proxyDispatcher && !isRapidApi) {
-    options.dispatcher = proxyDispatcher;
-  }
-
-  const res = await fetch(url.toString(), options);
   if (!res.ok) {
-    if (res.status === 403 && !isRapidApi) {
-      throw new Error(
-        `SofaScore HTTP 403 (Cloudflare block). Add RAPIDAPI_KEY to .env/Render or set SOFA_PROXY to bypass.`
-      );
-    }
-    throw new Error(`SofaScore HTTP ${res.status} (${res.statusText}) on ${url.toString()}`);
+    throw new Error(`365Scores HTTP ${res.status} (${res.statusText}) on ${endpointType}`);
   }
-  return res.json();
+
+  const data = await res.json();
+  return Array.isArray(data?.games) ? data.games : [];
 }
 
 /**
- * Fetches tournament events via SportAPI on RapidAPI (or direct SofaScore).
- * Mirrors SofaScore exact native paths:
- *   /api/v1/unique-tournament/{tournamentId}/season/{seasonId}/events/{course}/{page}
+ * Maps 365Scores game status and text to KickPredict internal status:
+ *   - SCHEDULED
+ *   - IN_PLAY
+ *   - PAUSED
+ *   - FINISHED
+ *   - POSTPONED
+ *   - CANCELLED
  */
-async function fetchTournamentEvents({
-  tournamentId = TOURNAMENT_ID,
-  seasonId = 65427,
-  course = 'last',
-  page = 0,
-  fetcher = null
-} = {}) {
-  const isRapidApi = Boolean(process.env.RAPIDAPI_KEY && process.env.RAPIDAPI_KEY.trim());
-  const path = `api/v1/unique-tournament/${tournamentId}/season/${seasonId}/events/${course}/${page}`;
+function map365ScoresStatus(game) {
+  if (!game) return 'SCHEDULED';
 
-  if (!isRapidApi) {
-    return sofaFetch(path);
-  }
+  const group = Number(game.statusGroup ?? game.code);
+  const statusText = String(game.statusText || game.description || '').toLowerCase();
+  const shortText = String(game.shortStatusText || '').toLowerCase();
+  const type = String(game.type || '').toLowerCase();
 
-  const candidateList = getRapidApiCandidateEndpoints(course, tournamentId, seasonId, page);
-  const candidates = cachedWorkingEndpoint
-    ? [cachedWorkingEndpoint, ...candidateList.filter((e) => e !== cachedWorkingEndpoint)]
-    : candidateList;
-
-  let lastError = null;
-  const host = RAPIDAPI_HOST.replace(/\/+$/, '');
-
-  for (const endpoint of candidates) {
-    const cleanEndpoint = sanitizePath(endpoint);
-    const url = new URL(`https://${host}/${cleanEndpoint}`);
-
-    const options = {
-      headers: {
-        'X-RapidAPI-Key': process.env.RAPIDAPI_KEY.trim(),
-        'X-RapidAPI-Host': host,
-        'Accept': 'application/json'
-      },
-      signal: AbortSignal.timeout(25000)
-    };
-
-    try {
-      console.log(`[Tunisia SofaScore] Querying SportAPI: ${url.toString()}`);
-      const actualFetcher = typeof fetcher === 'function' ? fetcher : fetch;
-      const res = await actualFetcher(url.toString(), options);
-      if (res.status === 404) {
-        console.warn(`[Tunisia SofaScore] Candidate /${cleanEndpoint} returned 404 Not Found.`);
-        lastError = new Error(`SportAPI endpoint /${cleanEndpoint} returned 404`);
-        continue;
-      }
-      if (!res.ok) {
-        console.error(`[Tunisia SofaScore] Candidate /${cleanEndpoint} returned HTTP ${res.status} (${res.statusText})`);
-        throw new Error(`SportAPI HTTP ${res.status} (${res.statusText}) on /${cleanEndpoint}`);
-      }
-      const data = await res.json();
-      console.log(`[Tunisia SofaScore] SportAPI /${cleanEndpoint} succeeded (HTTP 200).`);
-      console.log(`[Tunisia SofaScore] Raw JSON payload:`, JSON.stringify(data).slice(0, 4000));
-      cachedWorkingEndpoint = cleanEndpoint;
-      return data;
-    } catch (err) {
-      lastError = err;
-      if (err.message && err.message.includes('404')) {
-        continue;
-      }
-      throw err;
-    }
-  }
-
-  throw lastError || new Error(`SportAPI endpoint /${path} returned 404 on ${RAPIDAPI_HOST}`);
-}
-
-/**
- * Unwraps single event items from vendor structures
- */
-function unwrapEventsArray(arr) {
-  if (!Array.isArray(arr)) return [];
-  return arr
-    .map((item) => (item?.event && typeof item.event === 'object' ? item.event : item))
-    .filter((item) => item && typeof item === 'object');
-}
-
-/**
- * Robustly extracts match/event array from any RapidAPI vendor structure
- */
-function extractEventsFromResponse(data) {
-  if (!data) return [];
-  if (Array.isArray(data)) return unwrapEventsArray(data);
-
-  // Common direct array containers across RapidAPI sports wrappers
-  const directCandidates = [
-    data.events,
-    data.matches,
-    data.fixtures,
-    data.schedule,
-    data.items,
-    data.results,
-    data.result,
-    data.response,
-    data.data?.events,
-    data.data?.matches,
-    data.data?.fixtures,
-    data.data?.schedule,
-    data.data?.items,
-    data.data?.results,
-    data.data?.result,
-    data.data,
-    data.response?.events,
-    data.response?.matches
-  ];
-
-  for (const candidate of directCandidates) {
-    if (Array.isArray(candidate) && candidate.length > 0) {
-      return unwrapEventsArray(candidate);
-    }
-  }
-
-  // Check if events are grouped inside rounds / stages
-  if (Array.isArray(data.rounds)) {
-    const flat = data.rounds.flatMap((r) => Array.isArray(r.events) ? r.events : (Array.isArray(r.matches) ? r.matches : []));
-    if (flat.length > 0) return unwrapEventsArray(flat);
-  }
-  if (Array.isArray(data.data?.rounds)) {
-    const flat = data.data.rounds.flatMap((r) => Array.isArray(r.events) ? r.events : (Array.isArray(r.matches) ? r.matches : []));
-    if (flat.length > 0) return unwrapEventsArray(flat);
-  }
-
-  // Generic fallback: scan all object properties for any array of match-like items
-  const searchRoots = [data, data.data, data.response, data.result].filter((r) => r && typeof r === 'object');
-  for (const root of searchRoots) {
-    for (const val of Object.values(root)) {
-      if (Array.isArray(val) && val.length > 0) {
-        const sample = val[0];
-        if (
-          sample &&
-          typeof sample === 'object' &&
-          (sample.id || sample.matchId || sample.external_id || sample.homeTeam || sample.home_team || sample.startTimestamp)
-        ) {
-          return unwrapEventsArray(val);
-        }
-      }
-    }
-  }
-
-  return [];
-}
-
-/**
- * Maps SofaScore status structure to KickPredict internal status:
- * IN_PLAY, PAUSED, FINISHED, SCHEDULED, POSTPONED, CANCELLED
- */
-function mapSofaScoreStatus(status) {
-  if (!status) return 'SCHEDULED';
-  const type = String(status.type || '').toLowerCase();
-  const desc = String(status.description || '').toLowerCase();
-  const code = Number(status.code);
-
-  // Finished states (Ended, AET, AP, etc.)
-  if (type === 'finished' || code === 100 || code === 110 || code === 120 || desc.includes('ended')) {
-    return 'FINISHED';
-  }
-  // Halftime / Paused states
-  if (desc === 'halftime' || code === 7 || desc.includes('pause') || desc.includes('ht')) {
-    return 'PAUSED';
-  }
-  // Ongoing live match states (1st half, 2nd half, extra time, penalties)
+  // Check for postponed / cancelled textual keywords (Arabic & English)
   if (
-    type === 'inprogress' ||
-    code === 6 ||
-    code === 31 ||
-    code === 41 ||
-    code === 50 ||
-    desc.includes('half') ||
-    desc.includes('extra')
+    statusText.includes('تأجلت') ||
+    statusText.includes('تأجيل') ||
+    statusText.includes('postponed') ||
+    shortText.includes('تأجلت') ||
+    shortText.includes('postp') ||
+    type === 'postponed' ||
+    group === 60
   ) {
-    return 'IN_PLAY';
-  }
-  // Postponed
-  if (type === 'postponed' || code === 60 || desc.includes('postponed')) {
     return 'POSTPONED';
   }
-  // Cancelled / Abandoned
+
   if (
+    statusText.includes('ألغيت') ||
+    statusText.includes('إلغاء') ||
+    statusText.includes('cancelled') ||
+    statusText.includes('canceled') ||
+    shortText.includes('ألغيت') ||
     type === 'canceled' ||
     type === 'cancelled' ||
-    type === 'abandoned' ||
-    code === 70 ||
-    desc.includes('cancel') ||
-    desc.includes('abandon')
+    group === 70
   ) {
     return 'CANCELLED';
   }
-  // Not started / Scheduled
-  if (type === 'notstarted' || code === 0) {
-    return 'SCHEDULED';
+
+  // Check for halftime / paused
+  if (
+    group === 1 ||
+    group === 7 ||
+    statusText.includes('استراحة') ||
+    statusText.includes('halftime') ||
+    shortText.includes('ht') ||
+    shortText.includes('استراحة')
+  ) {
+    return 'PAUSED';
   }
-  return 'SCHEDULED';
+
+  // 365Scores statusGroup mapping
+  switch (group) {
+    case 1: // Halftime / Break ("استراحة")
+      return 'PAUSED';
+    case 2: // Not started ("لم تبدأ")
+      return 'SCHEDULED';
+    case 3: // In play / Live ("شوط 1", "شوط 2")
+      return 'IN_PLAY';
+    case 4: // Finished ("انتهت")
+      return 'FINISHED';
+    case 5: // Suspended / Cancelled / Postponed
+      return 'POSTPONED';
+    default:
+      if (type === 'finished' || group === 100 || statusText.includes('انتهت') || statusText.includes('ended')) {
+        return 'FINISHED';
+      }
+      if (type === 'inprogress' || statusText.includes('شوط') || statusText.includes('live')) {
+        return 'IN_PLAY';
+      }
+      return 'SCHEDULED';
+  }
 }
 
 /**
- * Extracts scores and half-time scores from SofaScore event objects
+ * Extracts scores and half-time scores from 365Scores game objects.
+ * Supports both full game objects and direct (homeScore, awayScore, status) parameters.
  */
-function parseSofaScoreScore(homeScoreObj, awayScoreObj, status) {
-  const isFinishedOrLive = status === 'FINISHED' || status === 'IN_PLAY' || status === 'PAUSED';
-  if (!isFinishedOrLive) {
+function parse365ScoresScore(gameOrHomeScore, awayScoreOrStatus, statusParam) {
+  if (gameOrHomeScore === null || gameOrHomeScore === undefined) {
     return { home: null, away: null, homeHt: null, awayHt: null };
   }
 
-  const home = typeof homeScoreObj === 'number'
-    ? homeScoreObj
-    : (homeScoreObj?.current ?? homeScoreObj?.display ?? homeScoreObj?.normaltime ?? null);
-  const away = typeof awayScoreObj === 'number'
-    ? awayScoreObj
-    : (awayScoreObj?.current ?? awayScoreObj?.display ?? awayScoreObj?.normaltime ?? null);
+  // Check if input is a 365Scores game object
+  if (typeof gameOrHomeScore === 'object' && ('homeCompetitor' in gameOrHomeScore || 'statusGroup' in gameOrHomeScore)) {
+    const game = gameOrHomeScore;
+    const status = awayScoreOrStatus || map365ScoresStatus(game);
+    const isLiveOrFinished = status === 'IN_PLAY' || status === 'PAUSED' || status === 'FINISHED';
 
-  const homeHt = typeof homeScoreObj === 'object' ? (homeScoreObj?.period1 ?? null) : null;
-  const awayHt = typeof awayScoreObj === 'object' ? (awayScoreObj?.period1 ?? null) : null;
+    let homeScore = null;
+    let awayScore = null;
 
+    const rawHome = game.homeCompetitor?.score;
+    const rawAway = game.awayCompetitor?.score;
+
+    if (isLiveOrFinished) {
+      if (typeof rawHome === 'number' && rawHome >= 0) {
+        homeScore = rawHome;
+      }
+      if (typeof rawAway === 'number' && rawAway >= 0) {
+        awayScore = rawAway;
+      }
+    }
+
+    let homeHt = null;
+    let awayHt = null;
+    if (Array.isArray(game.stages)) {
+      const htStage = game.stages.find(
+        (s) => s.id === 7 || s.name === 'First Half' || s.name === 'شوط 1' || s.stageNum === 1
+      );
+      if (htStage) {
+        if (typeof htStage.homeCompetitorScore === 'number' && htStage.homeCompetitorScore >= 0) {
+          homeHt = htStage.homeCompetitorScore;
+        }
+        if (typeof htStage.awayCompetitorScore === 'number' && htStage.awayCompetitorScore >= 0) {
+          awayHt = htStage.awayCompetitorScore;
+        }
+      }
+    }
+
+    return { home: homeScore, away: awayScore, homeHt, awayHt };
+  }
+
+  // Handle direct (homeScore, awayScore, status) or SofaScore-like score object signatures
+  const homeArg = gameOrHomeScore;
+  const awayArg = awayScoreOrStatus;
+  const status = statusParam;
+  const isLiveOrFinished = status === 'IN_PLAY' || status === 'PAUSED' || status === 'FINISHED';
+
+  const extractVal = (arg) => {
+    if (typeof arg === 'number') return arg >= 0 ? arg : null;
+    if (arg && typeof arg === 'object') {
+      const val = arg.current ?? arg.display ?? arg.normaltime;
+      return typeof val === 'number' && val >= 0 ? val : null;
+    }
+    return null;
+  };
+
+  const extractPeriod1 = (arg) => {
+    if (arg && typeof arg === 'object' && typeof arg.period1 === 'number' && arg.period1 >= 0) {
+      return arg.period1;
+    }
+    return null;
+  };
+
+  const home = isLiveOrFinished ? extractVal(homeArg) : null;
+  const away = isLiveOrFinished ? extractVal(awayArg) : null;
+  const homeHt = isLiveOrFinished ? extractPeriod1(homeArg) : null;
+  const awayHt = isLiveOrFinished ? extractPeriod1(awayArg) : null;
+
+  return { home, away, homeHt, awayHt };
+}
+
+/**
+ * Extracts round and matchday information from a 365Scores game.
+ */
+function roundInfoFrom365Scores(game) {
+  const roundNum = Number(game?.roundNum ?? game?.roundInfo?.round);
+  if (Number.isInteger(roundNum) && roundNum > 0) {
+    const roundPrefix = (game?.roundName && String(game.roundName).trim()) || 'الجولة';
+    return {
+      matchday: roundNum,
+      key: `MD:${roundNum}`,
+      label: `${roundPrefix} ${roundNum}`.trim()
+    };
+  }
+
+  const roundName = game?.roundName || game?.roundInfo?.name;
+  if (roundName && typeof roundName === 'string') {
+    return {
+      matchday: null,
+      key: roundName.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_'),
+      label: roundName.trim()
+    };
+  }
+
+  const stageNum = Number(game?.stageNum) || 1;
   return {
-    home: home !== null && !isNaN(Number(home)) ? Number(home) : null,
-    away: away !== null && !isNaN(Number(away)) ? Number(away) : null,
-    homeHt: homeHt !== null && !isNaN(Number(homeHt)) ? Number(homeHt) : null,
-    awayHt: awayHt !== null && !isNaN(Number(awayHt)) ? Number(awayHt) : null
+    matchday: null,
+    key: `STAGE_${stageNum}`,
+    label: 'الجولة'
   };
 }
 
 /**
- * Extracts round information from a SofaScore event
+ * Full fixture schedule & Poisson ratings sync from 365Scores:
+ * 1. Queries both 'current' and 'results' endpoints for Competition 554 in Arabic.
+ * 2. Deduplicates matches by unique game id.
+ * 3. Builds Poisson probability ratings from finished matches.
+ * 4. Upserts matches into PostgreSQL matches table with native Arabic team names.
  */
-function roundInfoFromSofaScore(event) {
-  const round = event.roundInfo?.round ?? event.round;
-  if (Number.isInteger(round) && round > 0) {
-    return { stage: 'REGULAR_SEASON', matchday: round, key: `MD:${round}`, label: `Matchday ${round}` };
-  }
-  const name = String(event.roundInfo?.name || event.round_name || 'Regular Season').trim();
-  const cleanKey = name.replace(/[^A-Za-z0-9]+/g, '_').toUpperCase() || 'MD_1';
-  return { stage: 'REGULAR_SEASON', matchday: null, key: cleanKey, label: name };
-}
+async function syncTunisianLeague(pool, { fetcher = fetch } = {}) {
+  console.log(`[Tunisia 365Scores] Fetching fixtures & results for Competition ID ${COMPETITION_ID}...`);
 
-/**
- * Resolves active SofaScore season ID for tournament 984.
- * First checks TUNISIA_SOFASCORE_SEASON_ID env var or cachedSeasonId.
- * If not preset, attempts discovering active seasons from RapidAPI and logs raw payload.
- * Safely defaults to 65427.
- */
-async function getActiveSeasonId(fetcher = sofaFetch) {
-  if (cachedSeasonId) return cachedSeasonId;
-  if (process.env.TUNISIA_SOFASCORE_SEASON_ID) {
-    cachedSeasonId = Number(process.env.TUNISIA_SOFASCORE_SEASON_ID);
-    console.log(`[Tunisia SofaScore] Using TUNISIA_SOFASCORE_SEASON_ID env var: ${cachedSeasonId}`);
-    return cachedSeasonId;
-  }
-
-  const isRapidApi = Boolean(process.env.RAPIDAPI_KEY && process.env.RAPIDAPI_KEY.trim());
-  if (isRapidApi) {
-    const seasonCandidates = [
-      `api/v1/unique-tournament/${TOURNAMENT_ID}/seasons`,
-      `unique-tournament/${TOURNAMENT_ID}/seasons`
-    ];
-
-    const host = RAPIDAPI_HOST.replace(/\/+$/, '');
-    for (const ep of seasonCandidates) {
-      try {
-        const cleanEp = sanitizePath(ep);
-        const url = new URL(`https://${host}/${cleanEp}`);
-
-        const res = await (fetcher === sofaFetch ? fetch : fetcher)(url.toString(), {
-          headers: {
-            'X-RapidAPI-Key': process.env.RAPIDAPI_KEY.trim(),
-            'X-RapidAPI-Host': host,
-            'Accept': 'application/json'
-          },
-          signal: AbortSignal.timeout(15000)
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          console.log(`[Tunisia SofaScore] Raw Seasons JSON from RapidAPI /${cleanEp}:`, JSON.stringify(data).slice(0, 2000));
-          const seasons = Array.isArray(data?.seasons)
-            ? data.seasons
-            : (Array.isArray(data?.data?.seasons)
-              ? data.data.seasons
-              : (Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])));
-
-          if (seasons.length > 0) {
-            let selectedSeason = seasons[0];
-            if (process.env.TUNISIA_SEASON) {
-              const target = String(process.env.TUNISIA_SEASON).trim();
-              const matched = seasons.find((s) => String(s.year || s.name || '').includes(target));
-              if (matched) selectedSeason = matched;
-            }
-            cachedSeasonId = Number(selectedSeason.id);
-            console.log(
-              `[Tunisia SofaScore] Discovered Season from RapidAPI: ${selectedSeason.name || selectedSeason.year} (ID: ${cachedSeasonId})`
-            );
-            return cachedSeasonId;
-          }
-        }
-      } catch (err) {
-        // Fall back gracefully
-      }
-    }
-  }
-
-  cachedSeasonId = 65427;
-  console.log(`[Tunisia SofaScore] Using preset season ID: ${cachedSeasonId}`);
-  return cachedSeasonId;
-}
-
-/**
- * Full fixture schedule & Poisson ratings sync from SofaScore:
- * 1. Resolves active season ID (verified via RapidAPI or preset 65427).
- * 2. Fetches recent finished fixtures (course: 'last') and upcoming fixtures (course: 'next').
- * 3. Builds Poisson expected-goals ratings.
- * 4. Inserts/updates matches table with 'TUN' competition code.
- */
-async function syncTunisianLeague(pool) {
   try {
-    const isRapidApi = Boolean(process.env.RAPIDAPI_KEY && process.env.RAPIDAPI_KEY.trim());
-    const seasonId = await getActiveSeasonId();
-    console.log(
-      `[Tunisia SofaScore] Syncing Tournament ID ${TOURNAMENT_ID}, Season ID ${seasonId} (mode: ${isRapidApi ? 'RapidAPI Gateway (SportAPI)' : 'Direct / Proxy'}).`
-    );
-
-    // Fetch finished fixtures (course: 'last') and upcoming scheduled fixtures (course: 'next') via SportAPI
-    const [lastRes, nextRes] = await Promise.allSettled([
-      fetchTournamentEvents({ tournamentId: TOURNAMENT_ID, seasonId, course: 'last', page: 0 }),
-      fetchTournamentEvents({ tournamentId: TOURNAMENT_ID, seasonId, course: 'next', page: 0 })
+    const [currentRes, resultsRes] = await Promise.allSettled([
+      fetch365ScoresGames('current', { fetcher }),
+      fetch365ScoresGames('results', { fetcher })
     ]);
 
-    if (lastRes.status === 'fulfilled') {
-      console.log(`[Tunisia SofaScore] Raw response for 'last':`, JSON.stringify(lastRes.value).slice(0, 3000));
-    } else {
-      console.error(`[Tunisia SofaScore] Fetch 'last' failed:`, lastRes.reason?.message);
+    const currentGames = currentRes.status === 'fulfilled' ? currentRes.value : [];
+    const resultsGames = resultsRes.status === 'fulfilled' ? resultsRes.value : [];
+
+    if (currentRes.status === 'rejected') {
+      console.warn('[Tunisia 365Scores] Current games fetch warning:', currentRes.reason?.message);
+    }
+    if (resultsRes.status === 'rejected') {
+      console.warn('[Tunisia 365Scores] Results games fetch warning:', resultsRes.reason?.message);
     }
 
-    if (nextRes.status === 'fulfilled') {
-      console.log(`[Tunisia SofaScore] Raw response for 'next':`, JSON.stringify(nextRes.value).slice(0, 3000));
-    } else {
-      console.error(`[Tunisia SofaScore] Fetch 'next' failed:`, nextRes.reason?.message);
+    const gamesMap = new Map();
+    for (const g of resultsGames) {
+      if (g && g.id) gamesMap.set(g.id, g);
+    }
+    for (const g of currentGames) {
+      if (g && g.id) gamesMap.set(g.id, g);
     }
 
-    const finishedEvents = lastRes.status === 'fulfilled'
-      ? extractEventsFromResponse(lastRes.value)
-      : [];
-    const upcomingEvents = nextRes.status === 'fulfilled'
-      ? extractEventsFromResponse(nextRes.value)
-      : [];
-
+    const allGames = Array.from(gamesMap.values());
     console.log(
-      `[Tunisia SofaScore] Extracted ${finishedEvents.length} finished events and ${upcomingEvents.length} upcoming events.`
+      `[Tunisia 365Scores] Extracted ${resultsGames.length} finished/past games and ${currentGames.length} current/upcoming games (${allGames.length} unique).`
     );
 
-    // Deduplicate events by event ID
-    const eventsMap = new Map();
-    for (const ev of [...finishedEvents, ...upcomingEvents]) {
-      const extId = ev?.id ?? ev?.external_id ?? ev?.matchId;
-      if (extId !== undefined && extId !== null) eventsMap.set(String(extId), ev);
-    }
-    const allEvents = Array.from(eventsMap.values());
-
-    if (!allEvents.length) {
-      console.warn('[Tunisia SofaScore] No events returned from SportAPI. Preserving existing database records.');
+    if (allGames.length === 0) {
+      console.warn('[Tunisia 365Scores] No games returned from 365Scores API. Preserving existing database records.');
       return;
     }
 
-    // Build Poisson expected goals model from finished matches
-    const finishedForModel = [];
-    for (const ev of allEvents) {
-      const st = mapSofaScoreStatus(ev.status);
-      if (st !== 'FINISHED') continue;
-      const scores = parseSofaScoreScore(ev.homeScore ?? ev.home_score, ev.awayScore ?? ev.away_score, st);
-      if (scores.home === null || scores.away === null) continue;
-      finishedForModel.push({
-        homeId: Number(ev.homeTeam?.id ?? ev.home_team?.id),
-        awayId: Number(ev.awayTeam?.id ?? ev.away_team?.id),
-        homeGoals: scores.home,
-        awayGoals: scores.away
-      });
+    // Build model ratings from finished games
+    const finishedForModel = allGames
+      .filter((g) => {
+        const st = map365ScoresStatus(g);
+        return (
+          st === 'FINISHED' &&
+          typeof g.homeCompetitor?.score === 'number' &&
+          g.homeCompetitor.score >= 0 &&
+          typeof g.awayCompetitor?.score === 'number' &&
+          g.awayCompetitor.score >= 0 &&
+          g.homeCompetitor?.id &&
+          g.awayCompetitor?.id
+        );
+      })
+      .map((g) => ({
+        homeId: Number(g.homeCompetitor.id),
+        awayId: Number(g.awayCompetitor.id),
+        homeGoals: Number(g.homeCompetitor.score),
+        awayGoals: Number(g.awayCompetitor.score)
+      }));
+
+    if (pool && finishedForModel.length < 4) {
+      try {
+        const { rows: dbFinished } = await pool.query(
+          `SELECT home_score, away_score, external_id
+           FROM matches
+           WHERE competition_code IN ('TUN', 'TU1')
+             AND status = 'FINISHED'
+             AND home_score IS NOT NULL
+             AND away_score IS NOT NULL`
+        );
+        for (const row of dbFinished) {
+          finishedForModel.push({
+            homeId: Number(row.external_id) || 1,
+            awayId: (Number(row.external_id) || 1) + 1,
+            homeGoals: row.home_score,
+            awayGoals: row.away_score
+          });
+        }
+      } catch (err) {
+        // Fallback to internal model defaults if query fails
+      }
     }
+
     const model = teamRatings(finishedForModel);
-    console.log(`[Tunisia SofaScore] Calculated team ratings from ${finishedForModel.length} finished fixtures.`);
+    console.log(`[Tunisia 365Scores] Calculated Poisson ratings from ${finishedForModel.length} finished fixtures.`);
 
     let updatedCount = 0;
-    for (const ev of allEvents) {
-      const extId = Number(ev.id ?? ev.external_id ?? ev.matchId);
-      const homeTeam = ev.homeTeam || ev.home_team;
-      const awayTeam = ev.awayTeam || ev.away_team;
-      const startTimestamp = ev.startTimestamp ?? ev.start_timestamp ?? (ev.date ? Math.floor(new Date(ev.date).getTime() / 1000) : null);
-      if (!Number.isSafeInteger(extId) || !homeTeam?.name || !awayTeam?.name || !startTimestamp) continue;
+    for (const g of allGames) {
+      const extId = Number(g.id);
+      const homeTeam = g.homeCompetitor;
+      const awayTeam = g.awayCompetitor;
 
-      const round = roundInfoFromSofaScore(ev);
-      const status = mapSofaScoreStatus(ev.status);
-      const scores = parseSofaScoreScore(ev.homeScore ?? ev.home_score, ev.awayScore ?? ev.away_score, status);
+      if (!Number.isSafeInteger(extId) || !homeTeam?.name || !awayTeam?.name || !g.startTime) {
+        continue;
+      }
+
+      const round = roundInfoFrom365Scores(g);
+      const status = map365ScoresStatus(g);
+      const scores = parse365ScoresScore(g, status);
       const { lambdaHome, lambdaAway } = matchLambdas(Number(homeTeam.id), Number(awayTeam.id), model);
       const markets = buildMatchMarketsPoints(lambdaHome, lambdaAway);
-      const kickoff = new Date(startTimestamp * 1000).toISOString();
+      const kickoff = new Date(g.startTime).toISOString();
 
-      const homeCrest = homeTeam.id ? `https://img.sofascore.com/api/v1/team/${homeTeam.id}/image` : null;
-      const awayCrest = awayTeam.id ? `https://img.sofascore.com/api/v1/team/${awayTeam.id}/image` : null;
+      const homeCrest = get365ScoresCrest(homeTeam.id);
+      const awayCrest = get365ScoresCrest(awayTeam.id);
 
       await pool.query(
         `INSERT INTO matches (
@@ -582,9 +395,9 @@ async function syncTunisianLeague(pool) {
           round.matchday,
           round.key,
           round.label,
-          homeTeam.name || homeTeam.shortName,
+          homeTeam.name || homeTeam.symbolicName,
           homeCrest,
-          awayTeam.name || awayTeam.shortName,
+          awayTeam.name || awayTeam.symbolicName,
           awayCrest,
           kickoff,
           status,
@@ -599,9 +412,9 @@ async function syncTunisianLeague(pool) {
       );
       updatedCount++;
     }
-    console.log(`[Tunisia SofaScore] Processed ${updatedCount} fixtures from SofaScore.`);
+    console.log(`[Tunisia 365Scores] Processed ${updatedCount} fixtures from 365Scores into PostgreSQL.`);
   } catch (err) {
-    console.error('[Tunisia SofaScore] Schedule sync error:', err.message);
+    console.error('[Tunisia 365Scores] Schedule sync error:', err.message);
   }
 }
 
@@ -610,23 +423,20 @@ let smartPollRunning = false;
 /**
  * Smart Polling for Tunisian League live matches:
  * Runs every 2 minutes, BUT checks the database first:
- * - Only queries SofaScore if there is an active match (IN_PLAY, PAUSED)
+ * - Only queries 365Scores if there is an active match (IN_PLAY, PAUSED)
  *   OR a match scheduled within the active window (kickoff - 10m to kickoff + 135m).
  * - If no active matches exist, 0 HTTP requests are made.
- * - When active matches exist, sends EXACTLY ONE aggregated batch query for the
- *   entire active round of Tournament 984, updating all concurrent fixtures
- *   simultaneously without looping single-match requests.
+ * - When active matches exist, sends EXACTLY ONE aggregated batch query to 365Scores 'current'
+ *   updating all concurrent fixtures simultaneously.
  */
 async function smartPollTunisia(
   pool,
-  { settleFinishedMatches, reconcileScoreCorrections, fetcher = sofaFetch } = {}
+  { settleFinishedMatches, reconcileScoreCorrections, fetcher = fetch } = {}
 ) {
   if (smartPollRunning) return;
   smartPollRunning = true;
 
   try {
-    const isRapidApi = Boolean(process.env.RAPIDAPI_KEY && process.env.RAPIDAPI_KEY.trim());
-
     // 1. Check database for active or upcoming Tunisian matches
     const { rows: activeMatches } = await pool.query(
       `SELECT id, external_id, home_team, away_team, utc_date, status, home_score, away_score,
@@ -650,50 +460,22 @@ async function smartPollTunisia(
     }
 
     console.log(
-      `[Tunisia SofaScore Smart Polling] Detected ${activeMatches.length} active/upcoming matches. Executing single aggregated batch query...`
+      `[Tunisia 365Scores Smart Polling] Detected ${activeMatches.length} active/upcoming matches. Executing single aggregated batch query...`
     );
 
-    const seasonId = await getActiveSeasonId(fetcher);
+    const currentGames = await fetch365ScoresGames('current', { fetcher });
 
-    // Determine batch query target:
-    // If any match is already live/paused or past its scheduled kickoff time, fetch 'events/last' (the active round).
-    // If all active matches are upcoming (before kickoff), fetch 'events/next'.
-    const now = new Date();
-    const hasLiveOrStarted = activeMatches.some(
-      (m) => m.status === 'IN_PLAY' || m.status === 'PAUSED' || (m.utc_date && new Date(m.utc_date) <= now)
-    );
-    const roundEndpoint = hasLiveOrStarted ? 'last' : 'next';
-
-    let data;
-    if (typeof fetcher === 'function' && fetcher !== sofaFetch && fetcher !== fetch) {
-      data = await fetcher(
-        `/api/v1/unique-tournament/${TOURNAMENT_ID}/season/${seasonId}/events/${roundEndpoint}/0`,
-        { tournamentId: TOURNAMENT_ID, seasonId, course: roundEndpoint, page: 0 }
-      );
-    } else {
-      data = await fetchTournamentEvents({
-        tournamentId: TOURNAMENT_ID,
-        seasonId,
-        course: roundEndpoint,
-        page: 0,
-        fetcher
-      });
-    }
-
-    const events = extractEventsFromResponse(data);
-
-    if (!events.length) {
-      console.log(`[Tunisia SofaScore Smart Polling] 0 events returned from batch endpoint (${roundEndpoint}).`);
+    if (!currentGames.length) {
+      console.log('[Tunisia 365Scores Smart Polling] 0 games returned from current endpoint.');
       return;
     }
 
-    // Index all events from the batch response by external_id (as string & number for robust matching)
-    const eventsMap = new Map();
-    for (const ev of events) {
-      const id = ev?.id ?? ev?.external_id ?? ev?.matchId;
-      if (id !== undefined && id !== null) {
-        eventsMap.set(String(id), ev);
-        eventsMap.set(Number(id), ev);
+    // Index all games by external_id (as string & number for robust matching)
+    const gamesMap = new Map();
+    for (const g of currentGames) {
+      if (g && g.id !== undefined && g.id !== null) {
+        gamesMap.set(String(g.id), g);
+        gamesMap.set(Number(g.id), g);
       }
     }
 
@@ -702,11 +484,11 @@ async function smartPollTunisia(
     // Process all active matches in memory from the single batch response
     for (const match of activeMatches) {
       try {
-        const ev = eventsMap.get(String(match.external_id)) || eventsMap.get(Number(match.external_id));
-        if (!ev) continue;
+        const g = gamesMap.get(String(match.external_id)) || gamesMap.get(Number(match.external_id));
+        if (!g) continue;
 
-        const newStatus = mapSofaScoreStatus(ev.status);
-        const scores = parseSofaScoreScore(ev.homeScore ?? ev.home_score, ev.awayScore ?? ev.away_score, newStatus);
+        const newStatus = map365ScoresStatus(g);
+        const scores = parse365ScoresScore(g, newStatus);
 
         const statusChanged = match.status !== newStatus;
         const scoreChanged =
@@ -737,12 +519,12 @@ async function smartPollTunisia(
           });
         }
       } catch (err) {
-        console.error(`[Tunisia SofaScore Smart Polling] Failed updating match ${match.external_id}:`, err.message);
+        console.error(`[Tunisia 365Scores Smart Polling] Failed updating match ${match.external_id}:`, err.message);
       }
     }
 
     if (updatedMatchRows.length > 0) {
-      console.log(`[Tunisia SofaScore Smart Polling] Updated ${updatedMatchRows.length} Tunisian matches in batch.`);
+      console.log(`[Tunisia 365Scores Smart Polling] Updated ${updatedMatchRows.length} Tunisian matches in batch.`);
       if (typeof reconcileScoreCorrections === 'function') {
         await reconcileScoreCorrections(updatedMatchRows);
       }
@@ -751,14 +533,14 @@ async function smartPollTunisia(
       }
     }
   } catch (err) {
-    console.error('[Tunisia SofaScore Smart Polling] Batch polling error:', err.message);
+    console.error('[Tunisia 365Scores Smart Polling] Batch polling error:', err.message);
   } finally {
     smartPollRunning = false;
   }
 }
 
 /**
- * Purges legacy or obsolete Tunisian matches (from FotMob or older imports) from PostgreSQL.
+ * Purges legacy or obsolete Tunisian matches from PostgreSQL.
  */
 async function purgeLegacyTunisiaMatches(pool) {
   try {
@@ -773,53 +555,52 @@ async function purgeLegacyTunisiaMatches(pool) {
          OR competition_code ILIKE '%TUN%';
     `);
     if (res.rowCount > 0 || boostRes.rowCount > 0) {
-      console.log(`[Tunisia SofaScore] Purged ${res.rowCount} legacy Tunisian matches and ${boostRes.rowCount} boosts from PostgreSQL.`);
+      console.log(`[Tunisia 365Scores] Purged ${res.rowCount} legacy Tunisian matches and ${boostRes.rowCount} boosts from PostgreSQL.`);
     }
     return { deletedMatches: res.rowCount, deletedBoosts: boostRes.rowCount };
   } catch (err) {
-    console.warn('[Tunisia SofaScore] Purge query warning:', err.message);
+    console.warn('[Tunisia 365Scores] Purge query warning:', err.message);
     return { deletedMatches: 0, deletedBoosts: 0 };
   }
 }
 
 /**
- * Initializes Tunisia background synchronization via SofaScore:
+ * Initializes Tunisia background synchronization via 365Scores:
  * 1. Purges legacy records and runs full schedule sync on boot.
  * 2. Schedules daily full sync at 06:00 UTC.
  * 3. Schedules smart polling every 2 minutes.
  */
 function initTunisiaSync({ pool, cron, settleFinishedMatches, reconcileScoreCorrections }) {
-  const isRapidApi = Boolean(process.env.RAPIDAPI_KEY && process.env.RAPIDAPI_KEY.trim());
   console.log(
-    `[Tunisia SofaScore] Initialized provider for Tournament ID ${TOURNAMENT_ID} (mode: ${isRapidApi ? 'RapidAPI Gateway' : 'Direct / Proxy'}).`
+    `[Tunisia 365Scores] Initialized provider for Competition ID ${COMPETITION_ID} (Public 365Scores API, Arabic langId=27, zero API keys required).`
   );
 
-  // 1. Initial schedule sync on startup (purges legacy records on boot, then loads fresh fixtures)
+  // 1. Initial schedule sync on startup
   (async () => {
     try {
       await purgeLegacyTunisiaMatches(pool);
       await syncTunisianLeague(pool);
     } catch (err) {
-      console.error('[Tunisia SofaScore] Initial startup sync error:', err.message);
+      console.error('[Tunisia 365Scores] Initial startup sync error:', err.message);
     }
   })();
 
   // 2. Daily schedule sync at 06:00 UTC
   cron.schedule('0 6 * * *', () => {
-    console.log('[Tunisia SofaScore] Running scheduled daily fixture refresh...');
+    console.log('[Tunisia 365Scores] Running scheduled daily fixture refresh...');
     syncTunisianLeague(pool).catch((err) => {
-      console.error('[Tunisia SofaScore] Daily refresh error:', err.message);
+      console.error('[Tunisia 365Scores] Daily refresh error:', err.message);
     });
   });
 
   // 3. Smart polling every 2 minutes
   cron.schedule('*/2 * * * *', () => {
     smartPollTunisia(pool, { settleFinishedMatches, reconcileScoreCorrections }).catch((err) => {
-      console.error('[Tunisia SofaScore Smart Polling] Scheduled cycle error:', err.message);
+      console.error('[Tunisia 365Scores Smart Polling] Scheduled cycle error:', err.message);
     });
   });
 
-  console.log('[Tunisia SofaScore] Smart polling scheduled (every 2m with conditional database gate).');
+  console.log('[Tunisia 365Scores] Smart polling scheduled (every 2m with conditional database gate).');
 }
 
 module.exports = {
@@ -827,20 +608,17 @@ module.exports = {
   smartPollTunisia,
   initTunisiaSync,
   purgeLegacyTunisiaMatches,
-  sanitizePath,
-  mapSofaScoreStatus,
-  parseSofaScoreScore,
-  roundInfoFromSofaScore,
-  sofaFetch,
-  fetchTournamentEvents,
-  extractEventsFromResponse,
-  getRapidApiCandidateEndpoints,
-  getActiveSeasonId,
-  setCachedSeasonId: (id) => { cachedSeasonId = id; },
-  getCachedSeasonId: () => cachedSeasonId,
-  setCachedWorkingEndpoint: (ep) => { cachedWorkingEndpoint = ep; },
-  getCachedWorkingEndpoint: () => cachedWorkingEndpoint,
-  TOURNAMENT_ID
+  fetch365ScoresGames,
+  map365ScoresStatus,
+  parse365ScoresScore,
+  roundInfoFrom365Scores,
+  get365ScoresCrest,
+  COMPETITION_ID,
+  BASE_URL,
+  // Aliases for backwards compatibility
+  mapSofaScoreStatus: map365ScoresStatus,
+  parseSofaScoreScore: parse365ScoresScore,
+  roundInfoFromSofaScore: roundInfoFrom365Scores
 };
 
 // Standalone execution support: node sync-tunisia.js
@@ -848,7 +626,7 @@ if (require.main === module) {
   const cliPool = new Pool({ connectionString: process.env.DATABASE_URL, max: 2 });
   syncTunisianLeague(cliPool)
     .catch((error) => {
-      console.error('[Tunisia SofaScore] Failed:', error.message);
+      console.error('[Tunisia 365Scores] Failed:', error.message);
       process.exitCode = 1;
     })
     .finally(async () => {

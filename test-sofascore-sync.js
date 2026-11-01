@@ -1,135 +1,157 @@
 'use strict';
 const assert = require('assert');
 const {
-  mapSofaScoreStatus,
-  parseSofaScoreScore,
-  roundInfoFromSofaScore,
+  map365ScoresStatus,
+  parse365ScoresScore,
+  roundInfoFrom365Scores,
+  get365ScoresCrest,
+  fetch365ScoresGames,
   smartPollTunisia,
-  setCachedSeasonId,
-  sofaFetch,
-  fetchTournamentEvents,
-  extractEventsFromResponse,
-  getRapidApiCandidateEndpoints,
-  getActiveSeasonId,
-  setCachedWorkingEndpoint,
-  getCachedWorkingEndpoint,
-  sanitizePath,
-  purgeLegacyTunisiaMatches
+  syncTunisianLeague,
+  purgeLegacyTunisiaMatches,
+  COMPETITION_ID,
+  BASE_URL
 } = require('./sync-tunisia');
 const { teamRatings, matchLambdas, buildMatchMarketsPoints } = require('./pricingEngine');
 
-console.log('--- Testing SofaScore Status Mapping ---');
-assert.strictEqual(mapSofaScoreStatus({ type: 'finished', code: 100 }), 'FINISHED');
-assert.strictEqual(mapSofaScoreStatus({ type: 'inprogress', code: 6, description: '1st half' }), 'IN_PLAY');
-assert.strictEqual(mapSofaScoreStatus({ type: 'inprogress', code: 7, description: 'Halftime' }), 'PAUSED');
-assert.strictEqual(mapSofaScoreStatus({ type: 'inprogress', code: 31, description: '2nd half' }), 'IN_PLAY');
-assert.strictEqual(mapSofaScoreStatus({ type: 'notstarted', code: 0 }), 'SCHEDULED');
-assert.strictEqual(mapSofaScoreStatus({ type: 'postponed', code: 60 }), 'POSTPONED');
-assert.strictEqual(mapSofaScoreStatus({ type: 'canceled', code: 70 }), 'CANCELLED');
-console.log('✓ All Status Mappings passed');
+console.log('--- Testing 365Scores Status Mapping ---');
+assert.strictEqual(map365ScoresStatus({ statusGroup: 4, statusText: 'انتهت' }), 'FINISHED');
+assert.strictEqual(map365ScoresStatus({ statusGroup: 3, statusText: 'شوط 1' }), 'IN_PLAY');
+assert.strictEqual(map365ScoresStatus({ statusGroup: 3, statusText: 'شوط 2' }), 'IN_PLAY');
+assert.strictEqual(map365ScoresStatus({ statusGroup: 1, statusText: 'استراحة' }), 'PAUSED');
+assert.strictEqual(map365ScoresStatus({ statusGroup: 2, statusText: 'لم تبدأ' }), 'SCHEDULED');
+assert.strictEqual(map365ScoresStatus({ statusGroup: 4, statusText: 'تأجلت' }), 'POSTPONED');
+assert.strictEqual(map365ScoresStatus({ statusGroup: 5, statusText: 'ألغيت' }), 'CANCELLED');
+assert.strictEqual(map365ScoresStatus({ statusGroup: 2, statusText: 'مؤجلة', shortStatusText: 'تأجلت' }), 'POSTPONED');
 
-console.log('--- Testing Score Parsing ---');
-const finishedScore = parseSofaScoreScore(
-  { current: 2, display: 2, period1: 1, normaltime: 2 },
-  { current: 1, display: 1, period1: 0, normaltime: 1 },
-  'FINISHED'
-);
-assert.strictEqual(finishedScore.home, 2);
-assert.strictEqual(finishedScore.away, 1);
-assert.strictEqual(finishedScore.homeHt, 1);
-assert.strictEqual(finishedScore.awayHt, 0);
+// Backwards compatibility format checks
+assert.strictEqual(map365ScoresStatus({ type: 'finished', code: 100 }), 'FINISHED');
+assert.strictEqual(map365ScoresStatus({ type: 'inprogress', code: 6, description: '1st half' }), 'IN_PLAY');
+assert.strictEqual(map365ScoresStatus({ type: 'inprogress', code: 7, description: 'Halftime' }), 'PAUSED');
+assert.strictEqual(map365ScoresStatus({ type: 'notstarted', code: 0 }), 'SCHEDULED');
+assert.strictEqual(map365ScoresStatus({ type: 'postponed', code: 60 }), 'POSTPONED');
+assert.strictEqual(map365ScoresStatus({ type: 'canceled', code: 70 }), 'CANCELLED');
+console.log('✓ All 365Scores Status Mappings passed');
 
-const liveScore = parseSofaScoreScore(
-  { current: 1, period1: 1 },
-  { current: 0, period1: 0 },
-  'IN_PLAY'
-);
-assert.strictEqual(liveScore.home, 1);
-assert.strictEqual(liveScore.away, 0);
-assert.strictEqual(liveScore.homeHt, 1);
-assert.strictEqual(liveScore.awayHt, 0);
+console.log('--- Testing 365Scores Score Parsing ---');
+// 1. Full 365Scores game object
+const finishedGame = {
+  statusGroup: 4,
+  statusText: 'انتهت',
+  homeCompetitor: { score: 2 },
+  awayCompetitor: { score: 1 },
+  stages: [
+    { id: 7, name: 'First Half', homeCompetitorScore: 1, awayCompetitorScore: 0 }
+  ]
+};
+const parsedFinished = parse365ScoresScore(finishedGame, 'FINISHED');
+assert.strictEqual(parsedFinished.home, 2);
+assert.strictEqual(parsedFinished.away, 1);
+assert.strictEqual(parsedFinished.homeHt, 1);
+assert.strictEqual(parsedFinished.awayHt, 0);
 
-const scheduledScore = parseSofaScoreScore(null, null, 'SCHEDULED');
-assert.strictEqual(scheduledScore.home, null);
-assert.strictEqual(scheduledScore.away, null);
+// 2. Live in-play game
+const liveGame = {
+  statusGroup: 3,
+  statusText: 'شوط 2',
+  homeCompetitor: { score: 1 },
+  awayCompetitor: { score: 0 },
+  stages: [
+    { id: 7, name: 'First Half', homeCompetitorScore: 1, awayCompetitorScore: 0 }
+  ]
+};
+const parsedLive = parse365ScoresScore(liveGame, 'IN_PLAY');
+assert.strictEqual(parsedLive.home, 1);
+assert.strictEqual(parsedLive.away, 0);
+assert.strictEqual(parsedLive.homeHt, 1);
+assert.strictEqual(parsedLive.awayHt, 0);
 
-// Numeric score format support
-const numericScore = parseSofaScoreScore(3, 1, 'FINISHED');
+// 3. Scheduled game (-1 scores from 365Scores)
+const scheduledGame = {
+  statusGroup: 2,
+  statusText: 'لم تبدأ',
+  homeCompetitor: { score: -1 },
+  awayCompetitor: { score: -1 }
+};
+const parsedScheduled = parse365ScoresScore(scheduledGame, 'SCHEDULED');
+assert.strictEqual(parsedScheduled.home, null);
+assert.strictEqual(parsedScheduled.away, null);
+
+// 4. Numeric direct parameters
+const numericScore = parse365ScoresScore(3, 1, 'FINISHED');
 assert.strictEqual(numericScore.home, 3);
 assert.strictEqual(numericScore.away, 1);
 
-const zeroZeroScore = parseSofaScoreScore(0, 0, 'IN_PLAY');
+const zeroZeroScore = parse365ScoresScore(0, 0, 'IN_PLAY');
 assert.strictEqual(zeroZeroScore.home, 0);
 assert.strictEqual(zeroZeroScore.away, 0);
-console.log('✓ All Score Parsing tests passed (including numeric score formats)');
 
-console.log('--- Testing Flexible Event Extraction from Vendor Responses ---');
-assert.strictEqual(extractEventsFromResponse({ events: [{ id: 101 }] }).length, 1);
-assert.strictEqual(extractEventsFromResponse({ matches: [{ id: 102 }] }).length, 1);
-assert.strictEqual(extractEventsFromResponse({ data: { events: [{ id: 103 }] } }).length, 1);
-assert.strictEqual(extractEventsFromResponse({ data: [{ id: 104 }] }).length, 1);
-assert.strictEqual(extractEventsFromResponse([{ id: 105 }]).length, 1);
-assert.strictEqual(extractEventsFromResponse({ events: [{ event: { id: 106, homeTeam: { name: 'EST' } } }] }).length, 1);
-assert.strictEqual(extractEventsFromResponse({ rounds: [{ events: [{ id: 107 }] }] }).length, 1);
-assert.strictEqual(extractEventsFromResponse({ fixtures: [{ id: 108 }] }).length, 1);
-assert.strictEqual(extractEventsFromResponse({ customList: [{ matchId: 109, home_team: 'CA' }] }).length, 1);
-assert.strictEqual(extractEventsFromResponse(null).length, 0);
-assert.strictEqual(extractEventsFromResponse({}).length, 0);
-console.log('✓ Event extraction across multiple RapidAPI vendor response formats passed');
+// 5. SofaScore-style period objects
+const sofaStyleScore = parse365ScoresScore(
+  { current: 2, period1: 1 },
+  { current: 1, period1: 0 },
+  'FINISHED'
+);
+assert.strictEqual(sofaStyleScore.home, 2);
+assert.strictEqual(sofaStyleScore.away, 1);
+assert.strictEqual(sofaStyleScore.homeHt, 1);
+assert.strictEqual(sofaStyleScore.awayHt, 0);
+console.log('✓ All 365Scores Score Parsing tests passed');
 
-console.log('--- Testing Round Info Extraction ---');
-const r1 = roundInfoFromSofaScore({ roundInfo: { round: 8, name: 'Round 8' } });
+console.log('--- Testing 365Scores Crest URL & Round Info ---');
+assert.strictEqual(
+  get365ScoresCrest(8233),
+  'https://imagecache.365scores.com/image/upload/f_png,w_80,h_80,c_limit,q_auto:best/competitors/8233'
+);
+assert.strictEqual(get365ScoresCrest(null), null);
+
+const r1 = roundInfoFrom365Scores({ roundNum: 8, roundName: 'الجولة' });
 assert.strictEqual(r1.matchday, 8);
 assert.strictEqual(r1.key, 'MD:8');
-assert.strictEqual(r1.label, 'Matchday 8');
+assert.strictEqual(r1.label, 'الجولة 8');
 
-const r2 = roundInfoFromSofaScore({ roundInfo: { name: 'Championship Playoff 1' } });
+const r2 = roundInfoFrom365Scores({ roundName: 'Championship Playoff 1' });
 assert.strictEqual(r2.matchday, null);
 assert.strictEqual(r2.key, 'CHAMPIONSHIP_PLAYOFF_1');
-console.log('✓ All Round Info extraction tests passed');
 
-console.log('--- Testing URL Path Sanitization (Double-Slash Prevention) ---');
-assert.strictEqual(sanitizePath('/api/v1/unique-tournament/984/seasons'), 'api/v1/unique-tournament/984/seasons');
-assert.strictEqual(sanitizePath('//api/v1/unique-tournament//984/seasons//'), 'api/v1/unique-tournament/984/seasons');
-assert.strictEqual(sanitizePath('/api/v1/unique-tournament/984/season/65427/events/last/0'), 'api/v1/unique-tournament/984/season/65427/events/last/0');
-assert.strictEqual(sanitizePath('//api/v1/unique-tournament//984/season/65427/events/last/0//'), 'api/v1/unique-tournament/984/season/65427/events/last/0');
-assert.strictEqual(sanitizePath('///'), '');
-console.log('✓ Path sanitization handles leading, trailing, and duplicate slashes cleanly');
+const r3 = roundInfoFrom365Scores({ stageNum: 2 });
+assert.strictEqual(r3.matchday, null);
+assert.strictEqual(r3.key, 'STAGE_2');
+console.log('✓ Crest URL and Round Info extraction tests passed');
 
-console.log('--- Testing Pricing Engine Integration with SofaScore Data ---');
-// Mock finished matches from SofaScore
-const mockFinishedSofaEvents = [
+console.log('--- Testing Pricing Engine Integration with 365Scores Data ---');
+const mockFinished365Events = [
   {
-    homeId: 102102, // Club Africain
-    awayId: 8153,   // Esperance
+    homeId: 8239, // Club Africain
+    awayId: 8234, // Esperance
     homeGoals: 1,
     awayGoals: 0
   },
   {
-    homeId: 6366,   // Etoile du Sahel
-    awayId: 102106, // CS Sfaxien
+    homeId: 8235, // Etoile du Sahel
+    awayId: 8237, // CS Sfaxien
     homeGoals: 2,
     awayGoals: 1
   },
   {
-    homeId: 8153,   // Esperance
-    awayId: 6366,   // Etoile du Sahel
+    homeId: 8234, // Esperance
+    awayId: 8235, // Etoile du Sahel
     homeGoals: 3,
     awayGoals: 1
   },
   {
-    homeId: 102109, // US Monastir
-    awayId: 102116, // Stade Tunisien
+    homeId: 8238, // US Monastir
+    awayId: 8233, // Stade Tunisien
     homeGoals: 0,
     awayGoals: 0
   }
 ];
 
-const model = teamRatings(mockFinishedSofaEvents);
+const model = teamRatings(mockFinished365Events);
 assert.ok(model.avgHome > 0, 'avgHome should be positive');
 assert.ok(model.avgAway > 0, 'avgAway should be positive');
 
-const { lambdaHome, lambdaAway } = matchLambdas(102102, 8153, model);
+const { lambdaHome, lambdaAway } = matchLambdas(8239, 8234, model);
 assert.ok(Number.isFinite(lambdaHome) && lambdaHome > 0, 'lambdaHome is valid');
 assert.ok(Number.isFinite(lambdaAway) && lambdaAway > 0, 'lambdaAway is valid');
 
@@ -139,52 +161,10 @@ assert.ok(markets.outcome_1x2.DRAW > 0, '1X2 DRAW points calculated');
 assert.ok(markets.outcome_1x2.AWAY > 0, '1X2 AWAY points calculated');
 assert.ok(markets.exact_score['1-0'] > 0, 'Exact score 1-0 points calculated');
 assert.ok(markets.extras.ou_2_5.OVER > 0, 'Extras ou_2_5 OVER points calculated');
-
 console.log('✓ Poisson pricing engine integration test passed successfully!');
 
-console.log('--- Testing Aggregated Smart Polling for Concurrent Matches ---');
+console.log('--- Testing PostgreSQL Legacy Tunisia Purge ---');
 (async () => {
-  console.log('--- Testing Season Discovery & Fallback ---');
-  setCachedSeasonId(65427);
-  let seasonsFetchCalled = 0;
-  const mockSeasonFetcher = async () => {
-    seasonsFetchCalled++;
-    return { seasons: [] };
-  };
-  const seasonIdResult = await getActiveSeasonId(mockSeasonFetcher);
-  assert.strictEqual(seasonIdResult, 65427, 'Uses fixed season ID 65427 when cached');
-  assert.strictEqual(seasonsFetchCalled, 0, 'Zero network calls made when cached');
-
-  // Test dynamic discovery from RapidAPI when uncached
-  const prevApiKey = process.env.RAPIDAPI_KEY;
-  try {
-    process.env.RAPIDAPI_KEY = 'test-key';
-    setCachedSeasonId(null);
-    delete process.env.TUNISIA_SOFASCORE_SEASON_ID;
-    let discoveryCalled = 0;
-    const mockDiscoveryFetcher = async () => {
-      discoveryCalled++;
-      return {
-        ok: true,
-        json: async () => ({
-          seasons: [
-            { id: 65427, year: '25/26', name: 'Ligue 1 25/26' },
-            { id: 61627, year: '24/25', name: 'Ligue 1 24/25' }
-          ]
-        })
-      };
-    };
-    const discoveredId = await getActiveSeasonId(mockDiscoveryFetcher);
-    assert.strictEqual(discoveredId, 65427);
-    assert.ok(discoveryCalled > 0, 'Discovers season from RapidAPI when uncached');
-    console.log('✓ Season discovery and fallback verified successfully');
-  } finally {
-    if (prevApiKey !== undefined) process.env.RAPIDAPI_KEY = prevApiKey;
-    else delete process.env.RAPIDAPI_KEY;
-    setCachedSeasonId(65427);
-  }
-
-  console.log('--- Testing PostgreSQL Legacy Tunisia Purge ---');
   const deletedSqls = [];
   const mockPurgePool = {
     query: async (sql) => {
@@ -200,13 +180,15 @@ console.log('--- Testing Aggregated Smart Polling for Concurrent Matches ---');
   assert.strictEqual(deletedSqls.length, 2);
   console.log('✓ Legacy Tunisian matches and boosts purge verified');
 
-  setCachedSeasonId(65427);
-
-  // 1. Test: Zero active matches in DB should result in 0 HTTP requests
+  console.log('--- Testing Aggregated Smart Polling for Concurrent Matches via 365Scores ---');
+  // 1. Zero active matches in DB should result in 0 HTTP requests
   let fetchCount = 0;
   const mockFetcher = async () => {
     fetchCount++;
-    return { events: [] };
+    return {
+      ok: true,
+      json: async () => ({ games: [] })
+    };
   };
 
   const emptyPool = {
@@ -214,45 +196,54 @@ console.log('--- Testing Aggregated Smart Polling for Concurrent Matches ---');
   };
 
   await smartPollTunisia(emptyPool, { fetcher: mockFetcher });
-  assert.strictEqual(fetchCount, 0, 'Zero requests should be sent when no matches are active');
+  assert.strictEqual(fetchCount, 0, 'Zero requests should be sent when no matches are active in DB');
   console.log('✓ Zero requests sent when no matches are active');
 
-  // 2. Test: 4 concurrent matches playing simultaneously -> exactly 1 aggregated request
+  // 2. 4 concurrent matches playing simultaneously -> exactly 1 aggregated request to 365Scores
   fetchCount = 0;
-  let fetchedPath = null;
-  let fetchedParams = null;
+  let requestedUrl = null;
 
-  const mockBatchFetcher = async (path, params) => {
+  const mockBatchFetcher = async (url) => {
     fetchCount++;
-    fetchedPath = path;
-    fetchedParams = params;
+    requestedUrl = url;
     return {
-      events: [
-        {
-          id: 1001,
-          status: { type: 'inprogress', code: 31, description: '2nd half' },
-          homeScore: { current: 2, period1: 1 },
-          awayScore: { current: 1, period1: 0 }
-        },
-        {
-          id: 1002,
-          status: { type: 'inprogress', code: 7, description: 'Halftime' },
-          homeScore: { current: 0, period1: 0 },
-          awayScore: { current: 0, period1: 0 }
-        },
-        {
-          id: 1003,
-          status: { type: 'finished', code: 100, description: 'Ended' },
-          homeScore: { current: 3, period1: 1 },
-          awayScore: { current: 2, period1: 1 }
-        },
-        {
-          id: 1004,
-          status: { type: 'inprogress', code: 6, description: '1st half' },
-          homeScore: { current: 1, period1: 1 },
-          awayScore: { current: 0, period1: 0 }
-        }
-      ]
+      ok: true,
+      json: async () => ({
+        games: [
+          {
+            id: 1001,
+            statusGroup: 3,
+            statusText: 'شوط 2',
+            homeCompetitor: { id: 8233, name: 'الملعب التونسي', score: 2 },
+            awayCompetitor: { id: 8234, name: 'الترجي', score: 1 },
+            stages: [{ id: 7, homeCompetitorScore: 1, awayCompetitorScore: 0 }]
+          },
+          {
+            id: 1002,
+            statusGroup: 1,
+            statusText: 'استراحة',
+            homeCompetitor: { id: 8235, name: 'النجم الساحلي', score: 0 },
+            awayCompetitor: { id: 8237, name: 'النادي الصفاقسي', score: 0 },
+            stages: [{ id: 7, homeCompetitorScore: 0, awayCompetitorScore: 0 }]
+          },
+          {
+            id: 1003,
+            statusGroup: 4,
+            statusText: 'انتهت',
+            homeCompetitor: { id: 8238, name: 'الاتحاد المنستيري', score: 3 },
+            awayCompetitor: { id: 8239, name: 'النادي الأفريقي', score: 2 },
+            stages: [{ id: 7, homeCompetitorScore: 1, awayCompetitorScore: 1 }]
+          },
+          {
+            id: 1004,
+            statusGroup: 3,
+            statusText: 'شوط 1',
+            homeCompetitor: { id: 8236, name: 'الترجي الجرجيسي', score: 1 },
+            awayCompetitor: { id: 8240, name: 'النادي البنزرتي', score: 0 },
+            stages: [{ id: 7, homeCompetitorScore: 1, awayCompetitorScore: 0 }]
+          }
+        ]
+      })
     };
   };
 
@@ -295,8 +286,9 @@ console.log('--- Testing Aggregated Smart Polling for Concurrent Matches ---');
 
   // Verify exactly 1 single batch call was made regardless of 4 concurrent matches
   assert.strictEqual(fetchCount, 1, 'Exactly 1 batch request must be sent for all concurrent matches');
-  assert.strictEqual(fetchedPath, '/api/v1/unique-tournament/984/season/65427/events/last/0');
-  console.log('✓ Exactly 1 aggregated API request sent for 4 concurrent matches');
+  assert.ok(requestedUrl.includes('competitions=554'), 'URL must target 365Scores competition 554');
+  assert.ok(requestedUrl.includes('langId=27'), 'URL must include Arabic langId=27');
+  console.log('✓ Exactly 1 aggregated 365Scores request sent for 4 concurrent matches');
 
   // Verify all 4 matches were updated
   assert.strictEqual(updatedDbRows.length, 4, 'All 4 matches should have been updated from the single batch response');
@@ -305,6 +297,8 @@ console.log('--- Testing Aggregated Smart Polling for Concurrent Matches ---');
   assert.strictEqual(updatedDbRows[0].away_score, 1);
 
   assert.strictEqual(updatedDbRows[1].status, 'PAUSED'); // Halftime
+  assert.strictEqual(updatedDbRows[1].home_score, 0);
+  assert.strictEqual(updatedDbRows[1].away_score, 0);
 
   assert.strictEqual(updatedDbRows[2].status, 'FINISHED'); // Ended
   assert.strictEqual(updatedDbRows[2].home_score, 3);
@@ -319,110 +313,98 @@ console.log('--- Testing Aggregated Smart Polling for Concurrent Matches ---');
   assert.strictEqual(reconciledRows.length, 4, 'reconcileScoreCorrections was called with 4 updated rows');
   console.log('✓ All 4 concurrent matches updated, reconciled, and settled accurately from 1 request');
 
-  console.log('--- Testing Official SportAPI RapidAPI Endpoints & Candidate Fallback ---');
-  const originalFetch = global.fetch;
-  const originalApiKey = process.env.RAPIDAPI_KEY;
-  const originalHost = process.env.RAPIDAPI_SOFA_HOST;
-
-  try {
-    process.env.RAPIDAPI_KEY = 'test-rapidapi-key-12345';
-    delete process.env.RAPIDAPI_SOFA_HOST;
-    setCachedWorkingEndpoint(null);
-
-    // Verify candidate lists for SportAPI
-    const lastCandidates = getRapidApiCandidateEndpoints('last');
-    assert.strictEqual(lastCandidates[0], 'api/v1/unique-tournament/984/season/65427/events/last/0');
-    assert.ok(lastCandidates.includes('api/v1/unique-tournament/984/season/65427/events/last/0'));
-    assert.ok(!lastCandidates.includes('nativePassThrough'), 'Must not contain nativePassThrough');
-    assert.ok(!lastCandidates.includes('tournaments/get-events'), 'Must not contain old non-SportAPI endpoints');
-
-    const nextCandidates = getRapidApiCandidateEndpoints('next');
-    assert.strictEqual(nextCandidates[0], 'api/v1/unique-tournament/984/season/65427/events/next/0');
-    assert.ok(nextCandidates.includes('api/v1/unique-tournament/984/season/65427/events/next/0'));
-    assert.ok(!nextCandidates.includes('nativePassThrough'), 'Must not contain nativePassThrough');
-
-    // Simulate SportAPI response on /api/v1/unique-tournament/984/season/65427/events/last/0
-    const calledUrls = [];
-    const calledOptionsList = [];
-
-    const mockFetchSportApi = async (url, options) => {
-      calledUrls.push(url);
-      calledOptionsList.push(options);
-
-      const parsedUrl = new URL(url);
-      if (parsedUrl.pathname === '/api/v1/unique-tournament/984/season/65427/events/last/0') {
-        return {
-          ok: true,
-          status: 200,
-          statusText: 'OK',
-          json: async () => ({
-            events: [
-              {
-                id: 5555,
-                homeTeam: { id: 102102, name: 'Club Africain' },
-                awayTeam: { id: 8153, name: 'Esperance Tunis' },
-                status: { type: 'inprogress', code: 31, description: '2nd half' },
-                homeScore: { current: 1, period1: 1 },
-                awayScore: { current: 1, period1: 0 },
-                startTimestamp: 1730000000
-              }
-            ]
-          })
-        };
+  console.log('--- Testing Full 365Scores Sync with Arabic Names ---');
+  const upsertedRows = [];
+  const fullSyncPool = {
+    query: async (sql, params) => {
+      if (sql.includes('SELECT home_score')) return { rows: [] };
+      if (sql.includes('INSERT INTO matches')) {
+        upsertedRows.push({
+          external_id: params[0],
+          matchday: params[1],
+          round_key: params[2],
+          round_label: params[3],
+          home_team: params[4],
+          home_crest: params[5],
+          away_team: params[6],
+          away_crest: params[7],
+          utc_date: params[8],
+          status: params[9],
+          home_score: params[10],
+          away_score: params[11]
+        });
+        return { rowCount: 1 };
       }
-      return { ok: false, status: 404, statusText: 'Not Found' };
-    };
+      return { rows: [] };
+    }
+  };
 
-    const res = await fetchTournamentEvents({
-      tournamentId: 984,
-      seasonId: 65427,
-      course: 'last',
-      page: 0,
-      fetcher: mockFetchSportApi
-    });
+  const mockFullSyncFetcher = async (url) => {
+    if (url.includes('/results/')) {
+      return {
+        ok: true,
+        json: async () => ({
+          games: [
+            {
+              id: 4800323,
+              competitionId: 554,
+              roundNum: 6,
+              roundName: 'الجولة',
+              startTime: '2026-10-29T14:30:00+01:00',
+              statusGroup: 4,
+              statusText: 'انتهت',
+              homeCompetitor: { id: 8233, name: 'الملعب التونسي', score: 1 },
+              awayCompetitor: { id: 8236, name: 'الترجي الجرجيسي', score: 0 }
+            }
+          ]
+        })
+      };
+    }
+    if (url.includes('/current/')) {
+      return {
+        ok: true,
+        json: async () => ({
+          games: [
+            {
+              id: 4797637,
+              competitionId: 554,
+              roundNum: 7,
+              roundName: 'الجولة',
+              startTime: '2026-11-03T14:30:00+01:00',
+              statusGroup: 2,
+              statusText: 'لم تبدأ',
+              homeCompetitor: { id: 8233, name: 'الملعب التونسي', score: -1 },
+              awayCompetitor: { id: 8239, name: 'النادي الأفريقي', score: -1 }
+            }
+          ]
+        })
+      };
+    }
+    return { ok: false, status: 404 };
+  };
 
-    const events = extractEventsFromResponse(res);
-    assert.strictEqual(events.length, 1, '1 event extracted from SportAPI response');
-    assert.strictEqual(events[0].id, 5555);
+  await syncTunisianLeague(fullSyncPool, { fetcher: mockFullSyncFetcher });
+  assert.strictEqual(upsertedRows.length, 2, 'Two matches upserted into matches table');
+  
+  // Verify finished result
+  const resMatch = upsertedRows.find(m => m.external_id === 4800323);
+  assert.ok(resMatch);
+  assert.strictEqual(resMatch.home_team, 'الملعب التونسي');
+  assert.strictEqual(resMatch.away_team, 'الترجي الجرجيسي');
+  assert.strictEqual(resMatch.status, 'FINISHED');
+  assert.strictEqual(resMatch.home_score, 1);
+  assert.strictEqual(resMatch.away_score, 0);
+  assert.strictEqual(resMatch.home_crest, 'https://imagecache.365scores.com/image/upload/f_png,w_80,h_80,c_limit,q_auto:best/competitors/8233');
 
-    // Verify call was made to SportAPI
-    assert.strictEqual(calledUrls.length, 1);
+  // Verify scheduled fixture
+  const curMatch = upsertedRows.find(m => m.external_id === 4797637);
+  assert.ok(curMatch);
+  assert.strictEqual(curMatch.home_team, 'الملعب التونسي');
+  assert.strictEqual(curMatch.away_team, 'النادي الأفريقي');
+  assert.strictEqual(curMatch.status, 'SCHEDULED');
+  assert.strictEqual(curMatch.home_score, null);
+  assert.strictEqual(curMatch.away_score, null);
 
-    // Verify NO double slashes in constructed URLs
-    assert.ok(!calledUrls[0].includes('//api'), 'URL must have single slash');
-    assert.ok(!calledUrls[0].includes('//unique-tournament'), 'URL must have single slash');
-
-    const url1 = new URL(calledUrls[0]);
-    assert.strictEqual(url1.hostname, 'sportapi7.p.rapidapi.com');
-    assert.strictEqual(url1.pathname, '/api/v1/unique-tournament/984/season/65427/events/last/0');
-
-    // Verify RapidAPI headers for SportAPI
-    assert.strictEqual(calledOptionsList[0].headers['X-RapidAPI-Host'], 'sportapi7.p.rapidapi.com');
-    assert.strictEqual(calledOptionsList[0].headers['X-RapidAPI-Key'], 'test-rapidapi-key-12345');
-
-    // Verify working endpoint was cached
-    assert.strictEqual(getCachedWorkingEndpoint(), 'api/v1/unique-tournament/984/season/65427/events/last/0');
-
-    // Subsequent call should use cached working endpoint immediately
-    calledUrls.length = 0;
-    const res2 = await fetchTournamentEvents({
-      tournamentId: 984,
-      seasonId: 65427,
-      course: 'last',
-      page: 0,
-      fetcher: mockFetchSportApi
-    });
-    assert.strictEqual(calledUrls.length, 1, 'Subsequent call uses cached endpoint directly (1 call)');
-    assert.strictEqual(new URL(calledUrls[0]).pathname, '/api/v1/unique-tournament/984/season/65427/events/last/0');
-
-    console.log('✓ Dedicated SportAPI tournament endpoints passed successfully (zero double slashes)');
-  } finally {
-    global.fetch = originalFetch;
-    if (originalApiKey !== undefined) process.env.RAPIDAPI_KEY = originalApiKey;
-    else delete process.env.RAPIDAPI_KEY;
-    if (originalHost !== undefined) process.env.RAPIDAPI_SOFA_HOST = originalHost;
-    else delete process.env.RAPIDAPI_SOFA_HOST;
-  }
-
-  console.log('All SofaScore integration and batch smart-polling unit tests passed!');
+  console.log('✓ Full 365Scores sync upserted Arabic match records and Poisson markets successfully');
+  console.log('All 365Scores unit and integration tests passed cleanly!');
 })();
