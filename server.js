@@ -8,17 +8,9 @@ const rateLimit = require('express-rate-limit');
 const jwt = require('jsonwebtoken');
 const cron = require('node-cron');
 const { Pool } = require('pg');
-const Fotmob = require('fotmob');
 const oddsProvider = require('./oddsProvider');
+const { initFlashscoreSync, syncFlashscoreSchedule, smartLivePolling } = require('./sync-flashscore');
 const { initTunisiaSync } = require('./sync-tunisia');
-
-const fotmob = new (Fotmob.default || Fotmob)();
-// FotMob modern JSON API endpoints
-fotmob.matchesUrl = 'https://www.fotmob.com/api/data/matches?';
-fotmob.leaguesUrl = 'https://www.fotmob.com/api/data/leagues?';
-fotmob.allLeaguesUrl = 'https://www.fotmob.com/api/data/allLeagues?';
-fotmob.teamsUrl = 'https://www.fotmob.com/api/data/teams?';
-fotmob.matchDetailsUrl = 'https://www.fotmob.com/api/data/matchDetails?';
 
 const {
   EXTRA_MARKETS,
@@ -831,10 +823,11 @@ app.get(
     }
 
     const { rows: matches } = await pool.query(
-      `SELECT id, external_id, competition_code, round_key, round_label,
+      `SELECT id, external_id, flashscore_id, competition_code, round_key, round_label,
               home_team, home_crest, away_team, away_crest,
               utc_date, status, home_score, away_score, home_ht, away_ht,
               home_lambda, away_lambda, markets_points, settled_outcomes,
+              match_stats, match_incidents, match_lineups,
               (NOW() >= utc_date OR status NOT IN ('TIMED', 'SCHEDULED')) AS is_locked
        FROM matches
        WHERE competition_code = $1 AND round_key = $2
@@ -920,6 +913,27 @@ app.get(
         };
       })
     });
+  })
+);
+
+app.get(
+  '/api/matches/:id/details',
+  asyncHandler(async (req, res) => {
+    const matchId = Number(req.params.id);
+    if (!Number.isSafeInteger(matchId)) {
+      return res.status(400).json({ error: 'Invalid match id.' });
+    }
+    const { rows } = await pool.query(
+      `SELECT id, external_id, flashscore_id, competition_code, home_team, away_team, status,
+              home_score, away_score, home_ht, away_ht, match_stats, match_incidents, match_lineups
+       FROM matches
+       WHERE id = $1`,
+      [matchId]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Match not found.' });
+    }
+    res.json(rows[0]);
   })
 );
 
@@ -1940,9 +1954,14 @@ async function ensureAutoCorrectionSchema() {
         ADD COLUMN IF NOT EXISTS settled_home_ht INT,
         ADD COLUMN IF NOT EXISTS settled_away_ht INT,
         ADD COLUMN IF NOT EXISTS last_corrected_at TIMESTAMPTZ,
-        ADD COLUMN IF NOT EXISTS fotmob_id BIGINT;
+        ADD COLUMN IF NOT EXISTS fotmob_id BIGINT,
+        ADD COLUMN IF NOT EXISTS flashscore_id VARCHAR(32),
+        ADD COLUMN IF NOT EXISTS match_stats JSONB,
+        ADD COLUMN IF NOT EXISTS match_incidents JSONB,
+        ADD COLUMN IF NOT EXISTS match_lineups JSONB;
 
       CREATE INDEX IF NOT EXISTS idx_matches_fotmob_id ON matches(fotmob_id);
+      CREATE INDEX IF NOT EXISTS idx_matches_flashscore_id ON matches(flashscore_id);
 
       UPDATE matches
       SET settled_home_score = COALESCE(settled_home_score, home_score),
@@ -1952,7 +1971,7 @@ async function ensureAutoCorrectionSchema() {
       WHERE points_calculated = TRUE AND settled_home_score IS NULL;
     `);
     schemaEnsured = true;
-    console.log('[Database] Auto-correction & FotMob columns verified.');
+    console.log('[Database] Auto-correction & Flashscore columns verified.');
     return true;
   } catch (err) {
     console.error('[Database] Schema verification error:', err.message);
@@ -2009,14 +2028,8 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// Match/result sync: every minute by default for real-time live updates and instant settlement.
-const SYNC_CRON = process.env.SYNC_CRON || '* * * * *';
-if (!cron.validate(SYNC_CRON)) {
-  console.error(`[FATAL] Invalid SYNC_CRON expression: ${SYNC_CRON}`);
-} else {
-  cron.schedule(SYNC_CRON, syncAll);
-  console.log(`[Sync] Scheduled with cron: ${SYNC_CRON}`);
-}
+// Universal Flashscore synchronization: On-Boot Fetch + Midnight Cron + Smart 2m Live Polling.
+// (Legacy 1-minute blind polling removed to prevent Cloudflare blocks and reduce server load)
 
 // Odds have their own conservative schedule so they don't consume quota every
 // time match data is refreshed. They are optional and disabled without a key.
@@ -2044,8 +2057,7 @@ const server = app.listen(PORT, async () => {
   console.log(`KickPredict backend listening on port ${PORT}`);
   console.log(`Competitions: ${COMPETITIONS.join(', ')}`);
   await ensureAutoCorrectionSchema();
-  syncAll();
-  initTunisiaSync({
+  initFlashscoreSync({
     pool,
     cron,
     settleFinishedMatches,
