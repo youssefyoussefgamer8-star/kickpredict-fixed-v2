@@ -908,6 +908,36 @@ app.get(
       standings,
       matches: matches.map((rawMatch) => {
         const m = enrichMatchWithLiveClock(rawMatch, espnEvents);
+        if (m.match_lineups) {
+          let lp = m.match_lineups;
+          if (typeof lp === 'string') {
+            try { lp = JSON.parse(lp); } catch { lp = null; }
+          }
+          if (lp) {
+            const hRoster = lp.homeRoster || {
+              formation: lp.formationHome || '4-3-3',
+              manager: lp.managerHome || null,
+              starting: lp.startingHome || [],
+              subs: lp.subsHome || []
+            };
+            const aRoster = lp.awayRoster || {
+              formation: lp.formationAway || '4-3-3',
+              manager: lp.managerAway || null,
+              starting: lp.startingAway || [],
+              subs: lp.subsAway || []
+            };
+            lp.homeRoster = hRoster;
+            lp.awayRoster = aRoster;
+            lp.startingHome = lp.startingHome || hRoster.starting;
+            lp.startingAway = lp.startingAway || aRoster.starting;
+            lp.subsHome = lp.subsHome || hRoster.subs;
+            lp.subsAway = lp.subsAway || aRoster.subs;
+            m.match_lineups = lp;
+            m.lineups = lp;
+            m.homeRoster = hRoster;
+            m.awayRoster = aRoster;
+          }
+        }
         return {
           ...m,
           competition_name: COMPETITION_NAMES[competition] || competition,
@@ -1059,25 +1089,40 @@ app.get(
       }
     }
 
-    // Ensure all contract properties (match_lineups, lineups, homeRoster, awayRoster) are explicitly defined
-    const lineupsPayload = row.match_lineups || null;
-    row.lineups = lineupsPayload;
+    // Ensure all contract properties (match_lineups, lineups, homeRoster, awayRoster) are explicitly defined and nested
+    let lineupsPayload = row.match_lineups || null;
     if (lineupsPayload) {
-      row.homeRoster = lineupsPayload.homeRoster || {
+      if (typeof lineupsPayload === 'string') {
+        try { lineupsPayload = JSON.parse(lineupsPayload); } catch { lineupsPayload = null; }
+      }
+    }
+    if (lineupsPayload) {
+      const hRoster = lineupsPayload.homeRoster || {
         formation: lineupsPayload.formationHome || '4-3-3',
         manager: lineupsPayload.managerHome || null,
         starting: lineupsPayload.startingHome || [],
         subs: lineupsPayload.subsHome || []
       };
-      row.awayRoster = lineupsPayload.awayRoster || {
+      const aRoster = lineupsPayload.awayRoster || {
         formation: lineupsPayload.formationAway || '4-3-3',
         manager: lineupsPayload.managerAway || null,
         starting: lineupsPayload.startingAway || [],
         subs: lineupsPayload.subsAway || []
       };
+      lineupsPayload.homeRoster = hRoster;
+      lineupsPayload.awayRoster = aRoster;
+      lineupsPayload.startingHome = lineupsPayload.startingHome || hRoster.starting;
+      lineupsPayload.startingAway = lineupsPayload.startingAway || aRoster.starting;
+      lineupsPayload.subsHome = lineupsPayload.subsHome || hRoster.subs;
+      lineupsPayload.subsAway = lineupsPayload.subsAway || aRoster.subs;
+
+      row.match_lineups = lineupsPayload;
+      row.lineups = lineupsPayload;
+      row.homeRoster = hRoster;
+      row.awayRoster = aRoster;
     }
 
-    console.log(`[API /details] Returning response for match ${matchId}: lineups=${Boolean(row.lineups || row.match_lineups)}`);
+    console.log(`[API /details] Returning response for match ${matchId}: lineups=${Boolean(row.lineups || row.match_lineups)}, startingHome=${row.homeRoster?.starting?.length || 0}, startingAway=${row.awayRoster?.starting?.length || 0}`);
     res.json(row);
   })
 );

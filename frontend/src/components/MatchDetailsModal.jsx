@@ -152,43 +152,106 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
   const awayScore = match.away_score;
   const hasScore = homeScore != null && awayScore != null;
 
-  // Resolve Rosters (Prioritize real lineups parsed from Flashscore API if present)
-  const rawLineupsCandidate =
+  // Resolve Rosters (Ultra-defensive resolution across all possible paths)
+  const candidate =
     realDetails?.match_lineups ||
     realDetails?.lineups ||
+    (realDetails?.homeRoster ? realDetails : null) ||
     match?.match_lineups ||
     match?.lineups ||
-    null;
+    (match?.homeRoster ? match : null);
 
   let realLineups = null;
-  if (rawLineupsCandidate) {
-    if (typeof rawLineupsCandidate === 'object') {
-      realLineups = rawLineupsCandidate;
-    } else if (typeof rawLineupsCandidate === 'string') {
+  if (candidate) {
+    if (typeof candidate === 'object') {
+      realLineups = candidate;
+    } else if (typeof candidate === 'string') {
       try {
-        realLineups = JSON.parse(rawLineupsCandidate);
+        realLineups = JSON.parse(candidate);
       } catch (e) {
         realLineups = null;
       }
     }
   }
 
-  // Extract starting lists and subs from either direct arrays or homeRoster/awayRoster
-  const rawStartingHome = realLineups?.startingHome || realLineups?.homeRoster?.starting || [];
-  const rawStartingAway = realLineups?.startingAway || realLineups?.awayRoster?.starting || [];
-  const rawSubsHome = realLineups?.subsHome || realLineups?.homeRoster?.subs || [];
-  const rawSubsAway = realLineups?.subsAway || realLineups?.awayRoster?.subs || [];
+  // Extract starting lists and subs from any available path
+  const rawStartingHome =
+    realLineups?.homeRoster?.starting ||
+    realLineups?.startingHome ||
+    realDetails?.homeRoster?.starting ||
+    realDetails?.startingHome ||
+    match?.homeRoster?.starting ||
+    match?.match_lineups?.homeRoster?.starting ||
+    match?.match_lineups?.startingHome ||
+    [];
 
-  // Flexible check: >= 10 starting players handles live matches or red cards
+  const rawStartingAway =
+    realLineups?.awayRoster?.starting ||
+    realLineups?.startingAway ||
+    realDetails?.awayRoster?.starting ||
+    realDetails?.startingAway ||
+    match?.awayRoster?.starting ||
+    match?.match_lineups?.awayRoster?.starting ||
+    match?.match_lineups?.startingAway ||
+    [];
+
+  const rawSubsHome =
+    realLineups?.homeRoster?.subs ||
+    realLineups?.subsHome ||
+    realDetails?.homeRoster?.subs ||
+    realDetails?.subsHome ||
+    match?.homeRoster?.subs ||
+    match?.match_lineups?.homeRoster?.subs ||
+    match?.match_lineups?.subsHome ||
+    [];
+
+  const rawSubsAway =
+    realLineups?.awayRoster?.subs ||
+    realLineups?.subsAway ||
+    realDetails?.awayRoster?.subs ||
+    realDetails?.subsAway ||
+    match?.awayRoster?.subs ||
+    match?.match_lineups?.awayRoster?.subs ||
+    match?.match_lineups?.subsAway ||
+    [];
+
+  // Flexible check: ANY valid list of starting players is displayed immediately
   const hasRealLineups = Boolean(
-    Array.isArray(rawStartingHome) && rawStartingHome.length >= 10 &&
-    Array.isArray(rawStartingAway) && rawStartingAway.length >= 10
+    Array.isArray(rawStartingHome) && rawStartingHome.length > 0 &&
+    Array.isArray(rawStartingAway) && rawStartingAway.length > 0
   );
 
-  const homeFormation = realLineups?.formationHome || realLineups?.homeRoster?.formation || '4-3-3';
-  const awayFormation = realLineups?.formationAway || realLineups?.awayRoster?.formation || '4-3-3';
-  const homeManager = realLineups?.managerHome || realLineups?.homeRoster?.manager || null;
-  const awayManager = realLineups?.managerAway || realLineups?.awayRoster?.manager || null;
+  const homeFormation =
+    realLineups?.homeRoster?.formation ||
+    realLineups?.formationHome ||
+    realDetails?.homeRoster?.formation ||
+    match?.match_lineups?.homeRoster?.formation ||
+    match?.homeRoster?.formation ||
+    '4-3-3';
+
+  const awayFormation =
+    realLineups?.awayRoster?.formation ||
+    realLineups?.formationAway ||
+    realDetails?.awayRoster?.formation ||
+    match?.match_lineups?.awayRoster?.formation ||
+    match?.awayRoster?.formation ||
+    '4-3-3';
+
+  const homeManager =
+    realLineups?.homeRoster?.manager ||
+    realLineups?.managerHome ||
+    realDetails?.homeRoster?.manager ||
+    match?.match_lineups?.homeRoster?.manager ||
+    match?.homeRoster?.manager ||
+    null;
+
+  const awayManager =
+    realLineups?.awayRoster?.manager ||
+    realLineups?.managerAway ||
+    realDetails?.awayRoster?.manager ||
+    match?.match_lineups?.awayRoster?.manager ||
+    match?.awayRoster?.manager ||
+    null;
 
   // Lineups are strictly resolved from authentic Flashscore data; NO mock or random players are ever used
   const homeRoster = hasRealLineups
@@ -718,7 +781,7 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
  * isHome = false (Top half, attacking downwards)
  */
 function renderTacticalFormation(players = [], formationStr = '4-3-3', isHome = true) {
-  if (!players || players.length < 10) return null;
+  if (!players || players.length === 0) return null;
 
   // Split formation, e.g. '4-3-3' -> [4, 3, 3] or '4-2-3-1' -> [4, 2, 3, 1]
   const rows = formationStr.split('-').map((n) => parseInt(n, 10)).filter((n) => !isNaN(n));
