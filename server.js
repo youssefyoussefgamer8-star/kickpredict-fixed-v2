@@ -962,28 +962,44 @@ app.get(
       'Expires': '0',
       'Surrogate-Control': 'no-store'
     });
-    const matchId = Number(req.params.id);
-    if (!Number.isSafeInteger(matchId)) {
+    const rawParam = String(req.params.id || '').trim();
+    if (!rawParam) {
       return res.status(400).json({ error: 'Invalid match id.' });
     }
+
+    const isNum = /^\d+$/.test(rawParam);
+    console.log(`[API /details] Request for match id/param: "${rawParam}" (isNum: ${isNum})`);
+
     const { rows } = await pool.query(
-      `SELECT id, external_id, flashscore_id, competition_code, home_team, away_team, status,
-              home_score, away_score, home_ht, away_ht, match_stats, match_incidents, match_lineups
-       FROM matches
-       WHERE id = $1`,
-      [matchId]
+      isNum
+        ? `SELECT id, external_id, flashscore_id, competition_code, home_team, away_team, status,
+                  utc_date, home_score, away_score, home_ht, away_ht, match_stats, match_incidents, match_lineups
+           FROM matches
+           WHERE id = $1::bigint OR external_id = $1::bigint
+           LIMIT 1`
+        : `SELECT id, external_id, flashscore_id, competition_code, home_team, away_team, status,
+                  utc_date, home_score, away_score, home_ht, away_ht, match_stats, match_incidents, match_lineups
+           FROM matches
+           WHERE flashscore_id = $1
+           LIMIT 1`,
+      [rawParam]
     );
+
     if (rows.length === 0) {
+      console.warn(`[API /details] Match not found for param: "${rawParam}"`);
       return res.status(404).json({ error: 'Match not found.' });
     }
     const row = rows[0];
+    const matchId = row.id;
     const rawFlashId = row.flashscore_id || (row.external_id && bigIntToFlashscoreId ? bigIntToFlashscoreId(row.external_id) : null);
-    console.log(`[API /details] Request for match ${matchId} (${row.home_team} vs ${row.away_team}) - rawFlashId: ${rawFlashId}, status: ${row.status}, hasLineupsInDB: ${Boolean(row.match_lineups)}`);
+    console.log(`[API /details] Match resolved: id=${matchId}, external_id=${row.external_id}, flashscore_id=${rawFlashId}, status=${row.status}, hasLineupsInDB=${Boolean(row.match_lineups)}`);
 
     const isFinished = row.status === 'FINISHED';
-    const isLive = row.status === 'IN_PLAY' || row.status === 'PAUSED';
+    const isLive = row.status === 'IN_PLAY' || row.status === 'PAUSED' || row.status === '1H' || row.status === '2H' || row.status === 'HT';
     const kickoffNearOrPast = row.utc_date && (new Date(row.utc_date).getTime() - Date.now() <= 60 * 60 * 1000);
     const shouldFetchLive = Boolean(rawFlashId && fetchMatchLiveDetails && (!row.match_lineups || isLive || !isFinished || kickoffNearOrPast));
+
+    console.log(`[API /details] shouldFetchLive=${shouldFetchLive} (isLive=${isLive}, isFinished=${isFinished}, kickoffNearOrPast=${Boolean(kickoffNearOrPast)}, hasLineups=${Boolean(row.match_lineups)})`);
 
     if (shouldFetchLive) {
       try {
@@ -1042,6 +1058,26 @@ app.get(
         console.error(`[API /details] Error fetching live details for match ${matchId} (${rawFlashId}):`, liveErr.message);
       }
     }
+
+    // Ensure all contract properties (match_lineups, lineups, homeRoster, awayRoster) are explicitly defined
+    const lineupsPayload = row.match_lineups || null;
+    row.lineups = lineupsPayload;
+    if (lineupsPayload) {
+      row.homeRoster = lineupsPayload.homeRoster || {
+        formation: lineupsPayload.formationHome || '4-3-3',
+        manager: lineupsPayload.managerHome || null,
+        starting: lineupsPayload.startingHome || [],
+        subs: lineupsPayload.subsHome || []
+      };
+      row.awayRoster = lineupsPayload.awayRoster || {
+        formation: lineupsPayload.formationAway || '4-3-3',
+        manager: lineupsPayload.managerAway || null,
+        starting: lineupsPayload.startingAway || [],
+        subs: lineupsPayload.subsAway || []
+      };
+    }
+
+    console.log(`[API /details] Returning response for match ${matchId}: lineups=${Boolean(row.lineups || row.match_lineups)}`);
     res.json(row);
   })
 );

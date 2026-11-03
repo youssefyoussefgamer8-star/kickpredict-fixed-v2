@@ -136,7 +136,9 @@ async function fetchFlashscoreFeed(feedPath, { fetcher = fetch } = {}) {
   const cleanPath = String(feedPath).replace(/^\/+/, '');
   const urls = [
     `${FLASHSCORE_BASE_URL}/${cleanPath}`,
-    `${FLASHSCORE_FALLBACK_URL}/${cleanPath}`
+    `${FLASHSCORE_FALLBACK_URL}/${cleanPath}`,
+    `https://global.flashscore.ninja/2/x/feed/${cleanPath}`,
+    `https://www.flashscore.com/x/feed/${cleanPath}`
   ];
 
   let lastError = null;
@@ -505,7 +507,9 @@ class PlayersArray extends Array {
  * Parses Flashscore match lineups (formations, managers, starting 11 with photo URLs, ratings, and subs).
  */
 function parseFlashscoreLineups(rawText) {
-  if (!rawText) return null;
+  if (!rawText || typeof rawText !== 'string') return null;
+
+  console.log(`[Flashscore Parser] Parsing raw lineups feed (length: ${rawText.length} chars)`);
 
   const formationMatches = [...rawText.matchAll(/LD÷([^¬]+)/g)].map((m) => m[1].replace(/^1-/, '').trim());
   const formationHome = formationMatches[0] || '4-3-3';
@@ -563,8 +567,36 @@ function parseFlashscoreLineups(rawText) {
       const slot = fields.LL ? parseInt(fields.LL, 10) : 99;
       const isGK = fields.LG === '3' || fields.LL === '1' || pNum === 1;
 
+      // Extract all events (handling multiple events like yellow card + sub)
       const pEvents = [];
-      if (fields.LIN) {
+      const pieces = item.split('¬');
+      for (let i = 0; i < pieces.length; i++) {
+        const piece = pieces[i];
+        if (piece.startsWith('LII÷')) {
+          const evCode = piece.slice(4).trim();
+          let evMinute = '';
+          let evDetail = '';
+          for (let j = i + 1; j < pieces.length && j < i + 5; j++) {
+            if (pieces[j].startsWith('LIT÷')) evMinute = pieces[j].slice(4).trim();
+            else if (pieces[j].startsWith('LIN÷')) evDetail = pieces[j].slice(4).trim();
+            else if (pieces[j].startsWith('LII÷')) break;
+          }
+
+          let evType = null;
+          const lowerDetail = evDetail.toLowerCase();
+          if (evCode === '1' || lowerDetail.includes('yellow')) evType = 'yellow_card';
+          else if (evCode === '2' || lowerDetail.includes('red')) evType = 'red_card';
+          else if (evCode === '3' || lowerDetail.includes('goal')) evType = 'goal';
+          else if (evCode === '8' || lowerDetail.includes('assist')) evType = 'assist';
+          else if (evCode === '6') evType = 'sub';
+          else if (evCode === '7') evType = 'sub';
+
+          if (evType) {
+            pEvents.push({ type: evType, minute: evMinute, detail: evDetail });
+          }
+        }
+      }
+      if (pEvents.length === 0 && fields.LIN) {
         const linLower = fields.LIN.toLowerCase();
         if (linLower.includes('yellow')) pEvents.push({ type: 'yellow_card', minute: fields.LIT || '' });
         else if (linLower.includes('red')) pEvents.push({ type: 'red_card', minute: fields.LIT || '' });
@@ -593,10 +625,10 @@ function parseFlashscoreLineups(rawText) {
   }
 
   // Sort starting 11 by tactical slot (LL) so Goalkeeper (Slot 1) is index 0 and formation rows follow tactical order
-  if (startingHome.length >= 11 && startingHome.some((p) => p.slot !== 99)) {
+  if (startingHome.length >= 10 && startingHome.some((p) => p.slot !== 99)) {
     startingHome.sort((a, b) => a.slot - b.slot);
   }
-  if (startingAway.length >= 11 && startingAway.some((p) => p.slot !== 99)) {
+  if (startingAway.length >= 10 && startingAway.some((p) => p.slot !== 99)) {
     startingAway.sort((a, b) => a.slot - b.slot);
   }
 
@@ -626,6 +658,19 @@ function parseFlashscoreLineups(rawText) {
   assignPos(startingHome, formationHome);
   assignPos(startingAway, formationAway);
 
+  const homeRoster = {
+    formation: formationHome,
+    manager: managerHome,
+    starting: startingHome,
+    subs: subsHome
+  };
+  const awayRoster = {
+    formation: formationAway,
+    manager: managerAway,
+    starting: startingAway,
+    subs: subsAway
+  };
+
   console.log(`[Flashscore Parser] Parsed lineups: Home ${formationHome} (${startingHome.length} starting, ${subsHome.length} subs), Away ${formationAway} (${startingAway.length} starting, ${subsAway.length} subs)`);
 
   return {
@@ -636,7 +681,9 @@ function parseFlashscoreLineups(rawText) {
     startingHome,
     startingAway,
     subsHome,
-    subsAway
+    subsAway,
+    homeRoster,
+    awayRoster
   };
 }
 
@@ -715,14 +762,33 @@ async function fetchMatchLiveDetails(matchRawId, { fetcher = fetch } = {}) {
       });
     };
 
+    const enrichedStartingHome = enrichList(lineups.startingHome);
+    const enrichedStartingAway = enrichList(lineups.startingAway);
+    const enrichedSubsHome = enrichList(lineups.subsHome);
+    const enrichedSubsAway = enrichList(lineups.subsAway);
+
     lineups = {
       ...lineups,
-      startingHome: enrichList(lineups.startingHome),
-      startingAway: enrichList(lineups.startingAway),
-      subsHome: enrichList(lineups.subsHome),
-      subsAway: enrichList(lineups.subsAway)
+      startingHome: enrichedStartingHome,
+      startingAway: enrichedStartingAway,
+      subsHome: enrichedSubsHome,
+      subsAway: enrichedSubsAway,
+      homeRoster: {
+        formation: lineups.formationHome,
+        manager: lineups.managerHome,
+        starting: enrichedStartingHome,
+        subs: enrichedSubsHome
+      },
+      awayRoster: {
+        formation: lineups.formationAway,
+        manager: lineups.managerAway,
+        starting: enrichedStartingAway,
+        subs: enrichedSubsAway
+      }
     };
   }
+
+  console.log(`[Flashscore Details] fetchMatchLiveDetails completed for ${matchRawId}: hasLineups=${Boolean(lineups)}, statsCount=${stats.length}, incidentsCount=${incidents.length}, scores=${JSON.stringify(scores)}, period=${period}`);
 
   return {
     stats,

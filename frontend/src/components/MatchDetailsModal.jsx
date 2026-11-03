@@ -118,9 +118,10 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
   // Attempt to fetch real details from backend if available
   useEffect(() => {
     let isMounted = true;
-    if (match?.id) {
+    const matchLookupId = match?.id || match?.external_id || match?.flashscore_id;
+    if (matchLookupId) {
       setLoadingDetails(true);
-      api(`/matches/${match.id}/details`)
+      api(`/matches/${matchLookupId}/details`)
         .then((data) => {
           if (isMounted) {
             if (data) {
@@ -129,7 +130,8 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
             setLoadingDetails(false);
           }
         })
-        .catch(() => {
+        .catch((err) => {
+          console.warn('[MatchDetails] Failed to fetch details:', err);
           if (isMounted) {
             setLoadingDetails(false);
           }
@@ -140,7 +142,7 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
     return () => {
       isMounted = false;
     };
-  }, [match?.id]);
+  }, [match?.id, match?.external_id, match?.flashscore_id]);
 
   if (!match) return null;
 
@@ -151,30 +153,49 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
   const hasScore = homeScore != null && awayScore != null;
 
   // Resolve Rosters (Prioritize real lineups parsed from Flashscore API if present)
+  const rawLineupsCandidate =
+    realDetails?.match_lineups ||
+    realDetails?.lineups ||
+    match?.match_lineups ||
+    match?.lineups ||
+    null;
+
   let realLineups = null;
-  if (realDetails?.match_lineups) {
-    if (typeof realDetails.match_lineups === 'object') {
-      realLineups = realDetails.match_lineups;
-    } else if (typeof realDetails.match_lineups === 'string') {
+  if (rawLineupsCandidate) {
+    if (typeof rawLineupsCandidate === 'object') {
+      realLineups = rawLineupsCandidate;
+    } else if (typeof rawLineupsCandidate === 'string') {
       try {
-        realLineups = JSON.parse(realDetails.match_lineups);
+        realLineups = JSON.parse(rawLineupsCandidate);
       } catch (e) {
         realLineups = null;
       }
     }
   }
 
+  // Extract starting lists and subs from either direct arrays or homeRoster/awayRoster
+  const rawStartingHome = realLineups?.startingHome || realLineups?.homeRoster?.starting || [];
+  const rawStartingAway = realLineups?.startingAway || realLineups?.awayRoster?.starting || [];
+  const rawSubsHome = realLineups?.subsHome || realLineups?.homeRoster?.subs || [];
+  const rawSubsAway = realLineups?.subsAway || realLineups?.awayRoster?.subs || [];
+
+  // Flexible check: >= 10 starting players handles live matches or red cards
   const hasRealLineups = Boolean(
-    realLineups?.startingHome && realLineups.startingHome.length >= 11 &&
-    realLineups?.startingAway && realLineups.startingAway.length >= 11
+    Array.isArray(rawStartingHome) && rawStartingHome.length >= 10 &&
+    Array.isArray(rawStartingAway) && rawStartingAway.length >= 10
   );
+
+  const homeFormation = realLineups?.formationHome || realLineups?.homeRoster?.formation || '4-3-3';
+  const awayFormation = realLineups?.formationAway || realLineups?.awayRoster?.formation || '4-3-3';
+  const homeManager = realLineups?.managerHome || realLineups?.homeRoster?.manager || null;
+  const awayManager = realLineups?.managerAway || realLineups?.awayRoster?.manager || null;
 
   // Lineups are strictly resolved from authentic Flashscore data; NO mock or random players are ever used
   const homeRoster = hasRealLineups
     ? {
-        formation: realLineups.formationHome || '4-3-3',
-        manager: realLineups.managerHome || null,
-        starting: realLineups.startingHome.map((p, idx) => ({
+        formation: homeFormation,
+        manager: homeManager,
+        starting: rawStartingHome.map((p, idx) => ({
           num: p.num ?? (idx + 1),
           name: p.name || `Player ${idx + 1}`,
           pos: p.pos || (idx === 0 ? 'GK' : 'MF'),
@@ -182,7 +203,7 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
           rating: p.rating || null,
           events: Array.isArray(p.events) ? p.events : []
         })),
-        subs: (realLineups.subsHome || []).map((p, idx) => ({
+        subs: rawSubsHome.map((p, idx) => ({
           num: p.num ?? (12 + idx),
           name: p.name || `Sub ${idx + 1}`,
           pos: p.pos || 'SUB',
@@ -195,9 +216,9 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
 
   const awayRoster = hasRealLineups
     ? {
-        formation: realLineups.formationAway || '4-3-3',
-        manager: realLineups.managerAway || null,
-        starting: realLineups.startingAway.map((p, idx) => ({
+        formation: awayFormation,
+        manager: awayManager,
+        starting: rawStartingAway.map((p, idx) => ({
           num: p.num ?? (idx + 1),
           name: p.name || `Player ${idx + 1}`,
           pos: p.pos || (idx === 0 ? 'GK' : 'MF'),
@@ -205,7 +226,7 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
           rating: p.rating || null,
           events: Array.isArray(p.events) ? p.events : []
         })),
-        subs: (realLineups.subsAway || []).map((p, idx) => ({
+        subs: rawSubsAway.map((p, idx) => ({
           num: p.num ?? (12 + idx),
           name: p.name || `Sub ${idx + 1}`,
           pos: p.pos || 'SUB',
@@ -697,7 +718,7 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
  * isHome = false (Top half, attacking downwards)
  */
 function renderTacticalFormation(players = [], formationStr = '4-3-3', isHome = true) {
-  if (!players || players.length < 11) return null;
+  if (!players || players.length < 10) return null;
 
   // Split formation, e.g. '4-3-3' -> [4, 3, 3] or '4-2-3-1' -> [4, 2, 3, 1]
   const rows = formationStr.split('-').map((n) => parseInt(n, 10)).filter((n) => !isNaN(n));

@@ -121,6 +121,20 @@ assert.strictEqual(parsed.startingAway[0].name, 'Alisson');
 assert.strictEqual(parsed.startingAway[0].photo, 'https://static.flashscore.com/res/image/data/xyzPhoto999.png');
 assert.strictEqual(parsed.subsHome[0].name, 'Neto');
 assert.ok(parsed.startingHome.includes('Raya D.'), 'Backward-compatible fuzzy includes must work');
+assert.ok(parsed.homeRoster && parsed.homeRoster.starting.length === 2, 'homeRoster contract must be populated');
+assert.ok(parsed.awayRoster && parsed.awayRoster.starting.length === 1, 'awayRoster contract must be populated');
+assert.strictEqual(parsed.homeRoster.formation, '4-2-3-1');
+assert.strictEqual(parsed.awayRoster.formation, '4-3-3');
 console.log('✓ Flashscore lineups, player photos, ratings & events parser verified');
+
+// 6. Test Multiple Events per Player Parsing (Goals, Yellow Cards, Substitutions)
+const sampleMultiEventFeed = `LA÷Formation¬LB÷Starting Lineups¬LC÷1¬~LD÷1-4-2-3-1¬LI÷Raphinha¬LJ÷11¬LPI÷photoRaph.png¬LII÷1¬LIT÷45'¬LIN÷Yellow Card¬LII÷3¬LIT÷52'¬LIN÷Goal¬LII÷6¬LIT÷70'¬LIN÷Gavi¬`;
+const parsedMulti = parseFlashscoreLineups(sampleMultiEventFeed);
+assert.strictEqual(parsedMulti.startingHome[0].name, 'Raphinha');
+assert.strictEqual(parsedMulti.startingHome[0].events.length, 3, 'Must capture all 3 events without overwriting');
+assert.strictEqual(parsedMulti.startingHome[0].events[0].type, 'yellow_card');
+assert.strictEqual(parsedMulti.startingHome[0].events[1].type, 'goal');
+assert.strictEqual(parsedMulti.startingHome[0].events[2].type, 'sub');
+console.log('✓ Multiple events per player parsed accurately without key collisions');
 
 console.log('All backend optimizations & security checks passed cleanly!');
