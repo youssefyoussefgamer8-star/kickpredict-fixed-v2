@@ -3,7 +3,9 @@ const assert = require('assert');
 const {
   parseSofascoreLineups,
   teamsMatch,
-  cleanTeamName
+  cleanTeamName,
+  extractEventsFromSofascore,
+  findSofascoreEventId
 } = require('./sync-sofascore');
 
 console.log('--- Testing Sofascore Module ---');
@@ -104,4 +106,98 @@ assert.strictEqual(parsed.homeRoster.formation, '4-2-3-1');
 assert.strictEqual(parsed.homeRoster.manager, 'Hansi Flick');
 
 console.log('✓ Sofascore lineups parser, player photos & unified roster contract verified');
-console.log('All Sofascore module tests passed cleanly!');
+
+(async () => {
+  // 3. Test extractEventsFromSofascore
+  const searchFormat1 = {
+    results: [
+      {
+        type: 'event',
+        entity: {
+          id: 11223344,
+          homeTeam: { name: 'FC Barcelona' },
+          awayTeam: { name: 'Aston Villa' },
+          startTimestamp: 1730664000
+        }
+      }
+    ]
+  };
+  const extracted1 = extractEventsFromSofascore(searchFormat1);
+  assert.strictEqual(extracted1.length, 1);
+  assert.strictEqual(extracted1[0].id, 11223344);
+
+  const searchFormat2 = {
+    events: [
+      {
+        id: 55667788,
+        homeTeam: { name: 'Liverpool' },
+        awayTeam: { name: 'Arsenal' },
+        startTimestamp: 1730478600
+      }
+    ]
+  };
+  const extracted2 = extractEventsFromSofascore(searchFormat2);
+  assert.strictEqual(extracted2.length, 1);
+  assert.strictEqual(extracted2[0].id, 55667788);
+  console.log('✓ extractEventsFromSofascore handles both results.entity and events formats');
+
+  // 4. Test findSofascoreEventId with mock fetcher for Past Dates via Search
+  const mockFetcherSearch = async (url) => {
+    if (url.includes('/search/all?q=')) {
+      return {
+        ok: true,
+        json: async () => ({
+          results: [
+            {
+              type: 'event',
+              entity: {
+                id: 998877,
+                homeTeam: { name: 'Barcelona' },
+                awayTeam: { name: 'Aston Villa' },
+                startTimestamp: 1730664000
+              }
+            }
+          ]
+        })
+      };
+    }
+    return { ok: false, status: 404 };
+  };
+
+  const foundSearchId = await findSofascoreEventId('Barcelona', 'Aston Villa', '2026-11-03T20:00:00.000Z', {
+    fetcher: mockFetcherSearch
+  });
+  assert.strictEqual(foundSearchId, 998877);
+  console.log('✓ findSofascoreEventId resolves past dates via /search/all direct team query');
+
+  // 5. Test findSofascoreEventId with mock fetcher for timezone boundary (+/- 1 day)
+  const mockFetcherTimezone = async (url) => {
+    if (url.includes('/search/all?q=')) {
+      return { ok: false, status: 403 }; // simulate search blocked
+    }
+    if (url.includes('/sport/football/scheduled-events/2026-11-02')) {
+      // found on previous day due to timezone shift
+      return {
+        ok: true,
+        json: async () => ({
+          events: [
+            {
+              id: 334455,
+              homeTeam: { name: 'Barcelona' },
+              awayTeam: { name: 'Aston Villa' }
+            }
+          ]
+        })
+      };
+    }
+    return { ok: true, json: async () => ({ events: [] }) };
+  };
+
+  const foundTimezoneId = await findSofascoreEventId('Barcelona', 'Aston Villa', '2026-11-03T01:00:00.000Z', {
+    fetcher: mockFetcherTimezone
+  });
+  assert.strictEqual(foundTimezoneId, 334455);
+  console.log('✓ findSofascoreEventId resolves matches on timezone day boundaries');
+
+  console.log('\nAll Sofascore module tests passed cleanly!');
+})();

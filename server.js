@@ -984,6 +984,29 @@ app.get(
   })
 );
 
+/**
+ * Checks whether a match lineups object contains valid, usable rosters
+ * for both home and away teams (at least 1 starter on each side).
+ */
+function hasUsableLineups(lineups) {
+  if (!lineups) return false;
+  let parsed = lineups;
+  if (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return false;
+    }
+  }
+  if (!parsed || typeof parsed !== 'object') return false;
+
+  const startingHome = parsed.homeRoster?.starting || parsed.startingHome;
+  const startingAway = parsed.awayRoster?.starting || parsed.startingAway;
+
+  return Array.isArray(startingHome) && startingHome.length > 0 &&
+         Array.isArray(startingAway) && startingAway.length > 0;
+}
+
 app.get(
   '/api/matches/:id/details',
   asyncHandler(async (req, res) => {
@@ -1023,88 +1046,135 @@ app.get(
     const row = rows[0];
     const matchId = row.id;
     const rawFlashId = row.flashscore_id || (row.external_id && bigIntToFlashscoreId ? bigIntToFlashscoreId(row.external_id) : null);
-    console.log(`[API /details] Match resolved: id=${matchId}, external_id=${row.external_id}, flashscore_id=${rawFlashId}, status=${row.status}, hasLineupsInDB=${Boolean(row.match_lineups)}`);
+    const hasLineupsInDB = hasUsableLineups(row.match_lineups);
+    console.log(`[API /details] Match resolved: id=${matchId}, external_id=${row.external_id}, flashscore_id=${rawFlashId}, status=${row.status}, hasLineupsInDB=${hasLineupsInDB}`);
 
-    const isFinished = row.status === 'FINISHED';
+    const isFinished = row.status === 'FINISHED' || row.status === 'FT';
     const isLive = row.status === 'IN_PLAY' || row.status === 'PAUSED' || row.status === '1H' || row.status === '2H' || row.status === 'HT';
     const kickoffNearOrPast = row.utc_date && (new Date(row.utc_date).getTime() - Date.now() <= 60 * 60 * 1000);
-    const shouldFetchLive = Boolean(rawFlashId && fetchMatchLiveDetails && (!row.match_lineups || isLive || !isFinished || kickoffNearOrPast));
 
-    console.log(`[API /details] shouldFetchLive=${shouldFetchLive} (isLive=${isLive}, isFinished=${isFinished}, kickoffNearOrPast=${Boolean(kickoffNearOrPast)}, hasLineups=${Boolean(row.match_lineups)})`);
+    // CRITICAL: If lineups are missing or incomplete in DB, ALWAYS force fetch regardless of FT/FINISHED status!
+    const needsLineups = !hasLineupsInDB;
+    const needsLiveMatchUpdate = isLive || !isFinished || kickoffNearOrPast;
 
-    if (shouldFetchLive) {
-      try {
-        console.log(`[API /details] Fetching live details from Flashscore for ${rawFlashId}...`);
-        const liveDetails = await fetchMatchLiveDetails(rawFlashId);
+    console.log(`[API /details] Match ${matchId} flags: needsLineups=${needsLineups}, needsLiveMatchUpdate=${needsLiveMatchUpdate}, isLive=${isLive}, isFinished=${isFinished}`);
 
-        // Hybrid Approach: Attempt Sofascore lineups first as primary source
-        let sofascoreLineups = null;
+    let bestLineups = hasLineupsInDB ? row.match_lineups : null;
+    let liveDetails = null;
+
+    if (needsLineups || needsLiveMatchUpdate) {
+      // 1. If lineups are needed, try Sofascore as a primary source
+      if (needsLineups && typeof fetchSofascoreLineups === 'function') {
         try {
-          console.log(`[API /details] Attempting Sofascore lineups lookup for ${row.home_team} vs ${row.away_team}...`);
-          sofascoreLineups = await fetchSofascoreLineups(row.home_team, row.away_team, row.utc_date);
-          if (sofascoreLineups && sofascoreLineups.startingHome?.length > 0) {
-            console.log(`[API /details] Sofascore lineups retrieved for ${row.home_team} vs ${row.away_team} (${sofascoreLineups.startingHome.length} home starters)`);
+          console.log(`[API /details] Attempting Sofascore lineups for ${row.home_team} vs ${row.away_team} (matchId: ${matchId}, date: ${row.utc_date})...`);
+          const sofascoreLineups = await fetchSofascoreLineups(row.home_team, row.away_team, row.utc_date);
+          if (hasUsableLineups(sofascoreLineups)) {
+            bestLineups = sofascoreLineups;
+            console.log(`[API /details] Sofascore lineups successfully retrieved for ${row.home_team} vs ${row.away_team} (${bestLineups.startingHome.length} home starters)`);
           }
         } catch (sofaErr) {
-          console.warn(`[API /details] Sofascore lineups error:`, sofaErr.message);
+          console.warn(`[API /details] Sofascore lineups lookup error for match ${matchId}:`, sofaErr.message);
         }
+      }
 
-        // Lineup Priority: Sofascore first, Flashscore as reliable fallback
-        const bestLineups = (sofascoreLineups && sofascoreLineups.startingHome?.length > 0)
-          ? sofascoreLineups
-          : (liveDetails?.lineups || null);
-
-        if (liveDetails || bestLineups) {
-          const hasLineups = Boolean(bestLineups);
-          const hasStats = Array.isArray(liveDetails?.stats) && liveDetails.stats.length > 0;
-          const hasIncidents = Array.isArray(liveDetails?.incidents) && liveDetails.incidents.length > 0;
-          console.log(`[API /details] Details for ${rawFlashId}: lineups=${hasLineups} (source: ${bestLineups?.source || 'flashscore'}), stats=${hasStats}, incidents=${hasIncidents}`);
-
-          let liveStatus = row.status;
-          let liveHomeScore = row.home_score;
-          let liveAwayScore = row.away_score;
-          if (liveDetails?.scores && liveDetails.scores.home !== null && liveDetails.scores.away !== null) {
-            liveHomeScore = liveDetails.scores.home;
-            liveAwayScore = liveDetails.scores.away;
-            if (row.status === 'SCHEDULED' || row.status === 'TIMED') {
-              liveStatus = 'IN_PLAY';
-            }
+      // 2. If Flashscore is available and we either need live match stats/scores OR we still need lineups:
+      if ((needsLiveMatchUpdate || !hasUsableLineups(bestLineups)) && rawFlashId && typeof fetchMatchLiveDetails === 'function') {
+        try {
+          console.log(`[API /details] Fetching live details from Flashscore for ${rawFlashId} (matchId: ${matchId})...`);
+          liveDetails = await fetchMatchLiveDetails(rawFlashId);
+          if (!hasUsableLineups(bestLineups) && hasUsableLineups(liveDetails?.lineups)) {
+            bestLineups = liveDetails.lineups;
+            console.log(`[API /details] Flashscore lineups successfully retrieved for match ${matchId} (${bestLineups.startingHome.length} home starters)`);
           }
-
-          if (hasLineups || hasStats || hasIncidents || liveHomeScore !== row.home_score || liveStatus !== row.status) {
-            await pool.query(
-              `UPDATE matches
-               SET flashscore_id = COALESCE(flashscore_id, $1),
-                   match_stats = COALESCE($2::jsonb, match_stats),
-                   match_incidents = COALESCE($3::jsonb, match_incidents),
-                   match_lineups = COALESCE($4::jsonb, match_lineups),
-                   status = $5,
-                   home_score = COALESCE($6, home_score),
-                   away_score = COALESCE($7, away_score),
-                   updated_at = NOW()
-               WHERE id = $8`,
-              [
-                rawFlashId,
-                hasStats ? JSON.stringify(liveDetails.stats) : null,
-                hasIncidents ? JSON.stringify(liveDetails.incidents) : null,
-                hasLineups ? JSON.stringify(bestLineups) : null,
-                liveStatus,
-                liveHomeScore,
-                liveAwayScore,
-                matchId
-              ]
-            );
-            if (hasLineups) row.match_lineups = bestLineups;
-            if (hasStats) row.match_stats = liveDetails.stats;
-            if (hasIncidents) row.match_incidents = liveDetails.incidents;
-            row.status = liveStatus;
-            row.home_score = liveHomeScore;
-            row.away_score = liveAwayScore;
-            console.log(`[API /details] Successfully saved details to DB for match ${matchId}`);
-          }
+        } catch (flashErr) {
+          console.warn(`[API /details] Flashscore live details fetch error for match ${matchId} (${rawFlashId}):`, flashErr.message);
         }
-      } catch (liveErr) {
-        console.error(`[API /details] Error in live details fetch for match ${matchId} (${rawFlashId}):`, liveErr.message);
+      }
+
+      const hasNewlyFetchedLineups = hasUsableLineups(bestLineups) && !hasLineupsInDB;
+      const hasStats = Array.isArray(liveDetails?.stats) && liveDetails.stats.length > 0;
+      const hasIncidents = Array.isArray(liveDetails?.incidents) && liveDetails.incidents.length > 0;
+
+      let liveStatus = row.status;
+      let liveHomeScore = row.home_score;
+      let liveAwayScore = row.away_score;
+      if (liveDetails?.scores && liveDetails.scores.home !== null && liveDetails.scores.away !== null) {
+        if (row.status === 'SCHEDULED' || row.status === 'TIMED') {
+          liveStatus = 'IN_PLAY';
+          liveHomeScore = liveDetails.scores.home;
+          liveAwayScore = liveDetails.scores.away;
+        } else if (isLive) {
+          liveHomeScore = liveDetails.scores.home;
+          liveAwayScore = liveDetails.scores.away;
+        }
+      }
+
+      // 3. Immediate Database Persistence
+      // If we obtained usable lineups for this match (finished or in play), update PostgreSQL immediately
+      if (hasNewlyFetchedLineups || (hasUsableLineups(bestLineups) && isLive)) {
+        try {
+          await pool.query(
+            `UPDATE matches
+             SET match_lineups = $1::jsonb,
+                 flashscore_id = COALESCE(flashscore_id, $2),
+                 match_stats = COALESCE($3::jsonb, match_stats),
+                 match_incidents = COALESCE($4::jsonb, match_incidents),
+                 status = $5,
+                 home_score = COALESCE($6, home_score),
+                 away_score = COALESCE($7, away_score),
+                 updated_at = NOW()
+             WHERE id = $8`,
+            [
+              JSON.stringify(bestLineups),
+              rawFlashId,
+              hasStats ? JSON.stringify(liveDetails.stats) : null,
+              hasIncidents ? JSON.stringify(liveDetails.incidents) : null,
+              liveStatus,
+              liveHomeScore,
+              liveAwayScore,
+              matchId
+            ]
+          );
+          row.match_lineups = bestLineups;
+          if (hasStats) row.match_stats = liveDetails.stats;
+          if (hasIncidents) row.match_incidents = liveDetails.incidents;
+          row.status = liveStatus;
+          row.home_score = liveHomeScore;
+          row.away_score = liveAwayScore;
+          console.log(`[API /details] Successfully saved lineups to DB for match ${matchId} (source: ${bestLineups.source || 'flashscore'}, isFinished: ${isFinished})`);
+        } catch (dbErr) {
+          console.error(`[API /details] Database update error for match ${matchId}:`, dbErr.message);
+        }
+      } else if (hasStats || hasIncidents || liveHomeScore !== row.home_score || liveStatus !== row.status) {
+        try {
+          await pool.query(
+            `UPDATE matches
+             SET flashscore_id = COALESCE(flashscore_id, $1),
+                 match_stats = COALESCE($2::jsonb, match_stats),
+                 match_incidents = COALESCE($3::jsonb, match_incidents),
+                 status = $4,
+                 home_score = COALESCE($5, home_score),
+                 away_score = COALESCE($6, away_score),
+                 updated_at = NOW()
+             WHERE id = $7`,
+            [
+              rawFlashId,
+              hasStats ? JSON.stringify(liveDetails.stats) : null,
+              hasIncidents ? JSON.stringify(liveDetails.incidents) : null,
+              liveStatus,
+              liveHomeScore,
+              liveAwayScore,
+              matchId
+            ]
+          );
+          if (hasStats) row.match_stats = liveDetails.stats;
+          if (hasIncidents) row.match_incidents = liveDetails.incidents;
+          row.status = liveStatus;
+          row.home_score = liveHomeScore;
+          row.away_score = liveAwayScore;
+        } catch (dbErr) {
+          console.error(`[API /details] Database stats update error for match ${matchId}:`, dbErr.message);
+        }
       }
     }
 

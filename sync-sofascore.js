@@ -175,60 +175,119 @@ function parseSofascoreLineups(data) {
 }
 
 /**
- * Searches for a Sofascore event ID given team names and date
+ * Helper to safely extract event objects from various Sofascore search/schedule responses
+ */
+function extractEventsFromSofascore(data) {
+  const events = [];
+  if (!data || typeof data !== 'object') return events;
+
+  if (Array.isArray(data.events)) {
+    events.push(...data.events);
+  }
+  if (Array.isArray(data.results)) {
+    for (const item of data.results) {
+      if (item.type === 'event' && item.entity) {
+        events.push(item.entity);
+      } else if (item.id && (item.homeTeam || item.homeTeamName) && (item.awayTeam || item.awayTeamName)) {
+        events.push(item);
+      }
+    }
+  }
+  return events;
+}
+
+/**
+ * Searches for a Sofascore event ID given team names and date.
+ * Accurately searches past dates, schedule endpoints, and direct keyword search.
  */
 async function findSofascoreEventId(homeTeam, awayTeam, matchDate, { fetcher = fetch } = {}) {
-  try {
-    const dateStr = matchDate ? new Date(matchDate).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
-    const scheduleUrl = `${SOFASCORE_API_BASE}/sport/football/scheduled-events/${dateStr}`;
-    console.log(`[Sofascore Finder] Searching for "${homeTeam}" vs "${awayTeam}" on ${dateStr}...`);
+  if (!homeTeam || !awayTeam) return null;
 
-    const res = await fetcher(scheduleUrl, {
-      headers: SOFASCORE_HEADERS,
-      signal: AbortSignal.timeout(8000)
-    });
+  const targetDate = matchDate ? new Date(matchDate) : new Date();
+  const targetTs = !isNaN(targetDate.getTime()) ? Math.floor(targetDate.getTime() / 1000) : null;
 
-    if (res.ok) {
-      const data = await res.json();
-      const events = Array.isArray(data.events) ? data.events : [];
-      const match = events.find((ev) => {
-        const evHome = ev.homeTeam?.name || '';
-        const evAway = ev.awayTeam?.name || '';
-        return (teamsMatch(evHome, homeTeam) && teamsMatch(evAway, awayTeam)) ||
-               (teamsMatch(evHome, awayTeam) && teamsMatch(evAway, homeTeam));
+  // 1. Direct Search Approach (/search/all?q={teamName})
+  // Searches for recent/past matches of either team and matches the fixture pair
+  const searchQueries = [homeTeam, awayTeam].filter(Boolean);
+  for (const query of searchQueries) {
+    try {
+      const searchUrl = `${SOFASCORE_API_BASE}/search/all?q=${encodeURIComponent(query)}`;
+      console.log(`[Sofascore Finder] Searching Sofascore for "${query}"...`);
+      const res = await fetcher(searchUrl, {
+        headers: SOFASCORE_HEADERS,
+        signal: AbortSignal.timeout(6000)
       });
+      if (res.ok) {
+        const data = await res.json();
+        const events = extractEventsFromSofascore(data);
+        const matchingEvents = events.filter((ev) => {
+          const evHome = ev.homeTeam?.name || ev.homeTeamName || '';
+          const evAway = ev.awayTeam?.name || ev.awayTeamName || '';
+          return (teamsMatch(evHome, homeTeam) && teamsMatch(evAway, awayTeam)) ||
+                 (teamsMatch(evHome, awayTeam) && teamsMatch(evAway, homeTeam));
+        });
 
-      if (match?.id) {
-        console.log(`[Sofascore Finder] Match found! Sofascore eventId: ${match.id} (${match.homeTeam?.name} vs ${match.awayTeam?.name})`);
-        return match.id;
+        if (matchingEvents.length > 0) {
+          // If we have a target date, find the closest event in time
+          if (targetTs && matchingEvents.length > 1) {
+            matchingEvents.sort((a, b) => {
+              const diffA = Math.abs((a.startTimestamp || 0) - targetTs);
+              const diffB = Math.abs((b.startTimestamp || 0) - targetTs);
+              return diffA - diffB;
+            });
+          }
+          const chosen = matchingEvents[0];
+          console.log(`[Sofascore Finder] Match found via search! eventId: ${chosen.id} (${chosen.homeTeam?.name || chosen.homeTeamName} vs ${chosen.awayTeam?.name || chosen.awayTeamName})`);
+          return chosen.id;
+        }
       }
+    } catch (searchErr) {
+      console.warn(`[Sofascore Finder] Search query "${query}" error:`, searchErr.message);
     }
-  } catch (err) {
-    console.warn(`[Sofascore Finder] Schedule search error: ${err.message}`);
   }
 
-  // Fallback: search by home team name
-  try {
-    const searchUrl = `${SOFASCORE_API_BASE}/search/all?q=${encodeURIComponent(homeTeam)}`;
-    const res = await fetcher(searchUrl, {
-      headers: SOFASCORE_HEADERS,
-      signal: AbortSignal.timeout(6000)
-    });
-    if (res.ok) {
-      const data = await res.json();
-      const events = Array.isArray(data.events) ? data.events : [];
-      const match = events.find((ev) => {
-        const evHome = ev.homeTeam?.name || '';
-        const evAway = ev.awayTeam?.name || '';
-        return teamsMatch(evHome, homeTeam) || teamsMatch(evAway, homeTeam);
-      });
-      if (match?.id) {
-        console.log(`[Sofascore Finder] Match found via search! eventId: ${match.id}`);
-        return match.id;
+  // 2. Scheduled Events Approach: check target date, and +/- 1 day to cover timezone boundaries
+  if (targetTs) {
+    const datesToCheck = [];
+    const baseDate = new Date(targetDate);
+    datesToCheck.push(baseDate.toISOString().slice(0, 10));
+
+    // Previous day (for evening matches in UTC that were next day local)
+    const prevDate = new Date(baseDate.getTime() - 24 * 60 * 60 * 1000);
+    datesToCheck.push(prevDate.toISOString().slice(0, 10));
+
+    // Next day (for morning matches in UTC that were previous day local)
+    const nextDate = new Date(baseDate.getTime() + 24 * 60 * 60 * 1000);
+    datesToCheck.push(nextDate.toISOString().slice(0, 10));
+
+    for (const dStr of datesToCheck) {
+      try {
+        const scheduleUrl = `${SOFASCORE_API_BASE}/sport/football/scheduled-events/${dStr}`;
+        console.log(`[Sofascore Finder] Checking scheduled events for ${dStr} ("${homeTeam}" vs "${awayTeam}")...`);
+        const res = await fetcher(scheduleUrl, {
+          headers: SOFASCORE_HEADERS,
+          signal: AbortSignal.timeout(8000)
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          const events = extractEventsFromSofascore(data);
+          const match = events.find((ev) => {
+            const evHome = ev.homeTeam?.name || ev.homeTeamName || '';
+            const evAway = ev.awayTeam?.name || ev.awayTeamName || '';
+            return (teamsMatch(evHome, homeTeam) && teamsMatch(evAway, awayTeam)) ||
+                   (teamsMatch(evHome, awayTeam) && teamsMatch(evAway, homeTeam));
+          });
+
+          if (match?.id) {
+            console.log(`[Sofascore Finder] Match found on ${dStr}! Sofascore eventId: ${match.id} (${match.homeTeam?.name || match.homeTeamName} vs ${match.awayTeam?.name || match.awayTeamName})`);
+            return match.id;
+          }
+        }
+      } catch (scheduleErr) {
+        console.warn(`[Sofascore Finder] Schedule search for ${dStr} error:`, scheduleErr.message);
       }
     }
-  } catch (err) {
-    console.warn(`[Sofascore Finder] Search fallback error: ${err.message}`);
   }
 
   return null;
@@ -276,6 +335,7 @@ module.exports = {
   SOFASCORE_HEADERS,
   cleanTeamName,
   teamsMatch,
+  extractEventsFromSofascore,
   parseSofascoreLineups,
   findSofascoreEventId,
   fetchSofascoreLineups
