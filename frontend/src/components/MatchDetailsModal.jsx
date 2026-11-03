@@ -3,7 +3,12 @@ import { api, API_BASE } from '../utils/api';
 
 function getProxiedImageUrl(url) {
   if (!url || typeof url !== 'string') return null;
-  if (url.includes('static.flashscore.com') || url.includes('flashscore.com')) {
+  if (
+    url.includes('static.flashscore.com') ||
+    url.includes('flashscore.com') ||
+    url.includes('sofascore.com') ||
+    url.includes('sofascore.app')
+  ) {
     return `${API_BASE}/image-proxy?url=${encodeURIComponent(url)}`;
   }
   return url;

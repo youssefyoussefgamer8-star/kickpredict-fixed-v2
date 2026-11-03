@@ -10,6 +10,7 @@ const cron = require('node-cron');
 const { Pool } = require('pg');
 const oddsProvider = require('./oddsProvider');
 const { initFlashscoreSync, syncFlashscoreSchedule, smartLivePolling, fetchMatchLiveDetails, bigIntToFlashscoreId } = require('./sync-flashscore');
+const { fetchSofascoreLineups } = require('./sync-sofascore');
 const { initTunisiaSync } = require('./sync-tunisia');
 
 const {
@@ -1035,16 +1036,34 @@ app.get(
       try {
         console.log(`[API /details] Fetching live details from Flashscore for ${rawFlashId}...`);
         const liveDetails = await fetchMatchLiveDetails(rawFlashId);
-        if (liveDetails) {
-          const hasLineups = Boolean(liveDetails.lineups);
-          const hasStats = Array.isArray(liveDetails.stats) && liveDetails.stats.length > 0;
-          const hasIncidents = Array.isArray(liveDetails.incidents) && liveDetails.incidents.length > 0;
-          console.log(`[API /details] Live details for ${rawFlashId} retrieved: lineups=${hasLineups}, stats=${hasStats}, incidents=${hasIncidents}`);
+
+        // Hybrid Approach: Attempt Sofascore lineups first as primary source
+        let sofascoreLineups = null;
+        try {
+          console.log(`[API /details] Attempting Sofascore lineups lookup for ${row.home_team} vs ${row.away_team}...`);
+          sofascoreLineups = await fetchSofascoreLineups(row.home_team, row.away_team, row.utc_date);
+          if (sofascoreLineups && sofascoreLineups.startingHome?.length > 0) {
+            console.log(`[API /details] Sofascore lineups retrieved for ${row.home_team} vs ${row.away_team} (${sofascoreLineups.startingHome.length} home starters)`);
+          }
+        } catch (sofaErr) {
+          console.warn(`[API /details] Sofascore lineups error:`, sofaErr.message);
+        }
+
+        // Lineup Priority: Sofascore first, Flashscore as reliable fallback
+        const bestLineups = (sofascoreLineups && sofascoreLineups.startingHome?.length > 0)
+          ? sofascoreLineups
+          : (liveDetails?.lineups || null);
+
+        if (liveDetails || bestLineups) {
+          const hasLineups = Boolean(bestLineups);
+          const hasStats = Array.isArray(liveDetails?.stats) && liveDetails.stats.length > 0;
+          const hasIncidents = Array.isArray(liveDetails?.incidents) && liveDetails.incidents.length > 0;
+          console.log(`[API /details] Details for ${rawFlashId}: lineups=${hasLineups} (source: ${bestLineups?.source || 'flashscore'}), stats=${hasStats}, incidents=${hasIncidents}`);
 
           let liveStatus = row.status;
           let liveHomeScore = row.home_score;
           let liveAwayScore = row.away_score;
-          if (liveDetails.scores && liveDetails.scores.home !== null && liveDetails.scores.away !== null) {
+          if (liveDetails?.scores && liveDetails.scores.home !== null && liveDetails.scores.away !== null) {
             liveHomeScore = liveDetails.scores.home;
             liveAwayScore = liveDetails.scores.away;
             if (row.status === 'SCHEDULED' || row.status === 'TIMED') {
@@ -1068,14 +1087,14 @@ app.get(
                 rawFlashId,
                 hasStats ? JSON.stringify(liveDetails.stats) : null,
                 hasIncidents ? JSON.stringify(liveDetails.incidents) : null,
-                hasLineups ? JSON.stringify(liveDetails.lineups) : null,
+                hasLineups ? JSON.stringify(bestLineups) : null,
                 liveStatus,
                 liveHomeScore,
                 liveAwayScore,
                 matchId
               ]
             );
-            if (hasLineups) row.match_lineups = liveDetails.lineups;
+            if (hasLineups) row.match_lineups = bestLineups;
             if (hasStats) row.match_stats = liveDetails.stats;
             if (hasIncidents) row.match_incidents = liveDetails.incidents;
             row.status = liveStatus;
@@ -1085,7 +1104,7 @@ app.get(
           }
         }
       } catch (liveErr) {
-        console.error(`[API /details] Error fetching live details for match ${matchId} (${rawFlashId}):`, liveErr.message);
+        console.error(`[API /details] Error in live details fetch for match ${matchId} (${rawFlashId}):`, liveErr.message);
       }
     }
 
@@ -1145,10 +1164,14 @@ app.get(
       return res.status(400).send('Invalid url');
     }
 
-    // Security check: restrict proxying strictly to trusted public football image domains
+    // Security check: restrict proxying strictly to trusted public football image domains (Flashscore + Sofascore)
     const allowedHosts = [
       'static.flashscore.com',
       'flashscore.com',
+      'img.sofascore.com',
+      'api.sofascore.com',
+      'api.sofascore.app',
+      'sofascore.com',
       'res.cloudinary.com',
       'upload.wikimedia.org'
     ];
@@ -1160,11 +1183,20 @@ app.get(
     }
 
     try {
+      const isSofascore = parsedUrl.hostname.includes('sofascore');
+      const upstreamHeaders = isSofascore
+        ? {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+            'Referer': 'https://www.sofascore.com/'
+          }
+        : {
+            'User-Agent': 'Dalvik/2.1.0 (Linux; U; Android 14; SM-S928B Build/UP1A.231005.007)',
+            'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+          };
+
       const upstreamRes = await fetch(parsedUrl.href, {
-        headers: {
-          'User-Agent': 'Dalvik/2.1.0 (Linux; U; Android 14; SM-S928B Build/UP1A.231005.007)',
-          'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
-        },
+        headers: upstreamHeaders,
         signal: AbortSignal.timeout(8000)
       });
 
