@@ -978,9 +978,14 @@ app.get(
     }
     const row = rows[0];
     const rawFlashId = row.flashscore_id || (row.external_id && bigIntToFlashscoreId ? bigIntToFlashscoreId(row.external_id) : null);
-    console.log(`[API /details] Request for match ${matchId} (${row.home_team} vs ${row.away_team}) - rawFlashId: ${rawFlashId}, hasLineupsInDB: ${Boolean(row.match_lineups)}`);
+    console.log(`[API /details] Request for match ${matchId} (${row.home_team} vs ${row.away_team}) - rawFlashId: ${rawFlashId}, status: ${row.status}, hasLineupsInDB: ${Boolean(row.match_lineups)}`);
 
-    if ((!row.match_lineups || row.status === 'IN_PLAY' || row.status === 'PAUSED') && rawFlashId && fetchMatchLiveDetails) {
+    const isFinished = row.status === 'FINISHED';
+    const isLive = row.status === 'IN_PLAY' || row.status === 'PAUSED';
+    const kickoffNearOrPast = row.utc_date && (new Date(row.utc_date).getTime() - Date.now() <= 60 * 60 * 1000);
+    const shouldFetchLive = Boolean(rawFlashId && fetchMatchLiveDetails && (!row.match_lineups || isLive || !isFinished || kickoffNearOrPast));
+
+    if (shouldFetchLive) {
       try {
         console.log(`[API /details] Fetching live details from Flashscore for ${rawFlashId}...`);
         const liveDetails = await fetchMatchLiveDetails(rawFlashId);
@@ -990,26 +995,46 @@ app.get(
           const hasIncidents = Array.isArray(liveDetails.incidents) && liveDetails.incidents.length > 0;
           console.log(`[API /details] Live details for ${rawFlashId} retrieved: lineups=${hasLineups}, stats=${hasStats}, incidents=${hasIncidents}`);
 
-          if (hasLineups || hasStats || hasIncidents) {
+          let liveStatus = row.status;
+          let liveHomeScore = row.home_score;
+          let liveAwayScore = row.away_score;
+          if (liveDetails.scores && liveDetails.scores.home !== null && liveDetails.scores.away !== null) {
+            liveHomeScore = liveDetails.scores.home;
+            liveAwayScore = liveDetails.scores.away;
+            if (row.status === 'SCHEDULED' || row.status === 'TIMED') {
+              liveStatus = 'IN_PLAY';
+            }
+          }
+
+          if (hasLineups || hasStats || hasIncidents || liveHomeScore !== row.home_score || liveStatus !== row.status) {
             await pool.query(
               `UPDATE matches
                SET flashscore_id = COALESCE(flashscore_id, $1),
                    match_stats = COALESCE($2::jsonb, match_stats),
                    match_incidents = COALESCE($3::jsonb, match_incidents),
                    match_lineups = COALESCE($4::jsonb, match_lineups),
+                   status = $5,
+                   home_score = COALESCE($6, home_score),
+                   away_score = COALESCE($7, away_score),
                    updated_at = NOW()
-               WHERE id = $5`,
+               WHERE id = $8`,
               [
                 rawFlashId,
                 hasStats ? JSON.stringify(liveDetails.stats) : null,
                 hasIncidents ? JSON.stringify(liveDetails.incidents) : null,
                 hasLineups ? JSON.stringify(liveDetails.lineups) : null,
+                liveStatus,
+                liveHomeScore,
+                liveAwayScore,
                 matchId
               ]
             );
             if (hasLineups) row.match_lineups = liveDetails.lineups;
             if (hasStats) row.match_stats = liveDetails.stats;
             if (hasIncidents) row.match_incidents = liveDetails.incidents;
+            row.status = liveStatus;
+            row.home_score = liveHomeScore;
+            row.away_score = liveAwayScore;
             console.log(`[API /details] Successfully saved details to DB for match ${matchId}`);
           }
         }

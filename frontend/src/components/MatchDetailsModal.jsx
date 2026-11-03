@@ -20,341 +20,6 @@ const LEAGUE_LOGOS = {
   TU1: 'https://static.flashscore.com/res/image/data/YBrafEB7-j18GLkLE.png'
 };
 
-// Realistic mock rosters for popular clubs
-const KNOWN_ROSTERS = {
-  'Arsenal': {
-    formation: '4-3-3',
-    manager: 'Mikel Arteta',
-    starting: [
-      { num: 22, name: 'Raya', pos: 'GK' },
-      { num: 4, name: 'White', pos: 'DF' },
-      { num: 2, name: 'Saliba', pos: 'DF' },
-      { num: 6, name: 'Gabriel', pos: 'DF' },
-      { num: 12, name: 'Timber', pos: 'DF' },
-      { num: 5, name: 'Partey', pos: 'MF' },
-      { num: 41, name: 'Rice', pos: 'MF' },
-      { num: 8, name: 'Ødegaard', pos: 'MF' },
-      { num: 7, name: 'Saka', pos: 'FW' },
-      { num: 29, name: 'Havertz', pos: 'FW' },
-      { num: 11, name: 'Martinelli', pos: 'FW' }
-    ],
-    subs: [
-      { num: 32, name: 'Neto', pos: 'GK' },
-      { num: 15, name: 'Kiwior', pos: 'DF' },
-      { num: 17, name: 'Zinchenko', pos: 'DF' },
-      { num: 20, name: 'Jorginho', pos: 'MF' },
-      { num: 23, name: 'Merino', pos: 'MF' },
-      { num: 19, name: 'Trossard', pos: 'FW' },
-      { num: 9, name: 'Jesus', pos: 'FW' },
-      { num: 30, name: 'Sterling', pos: 'FW' }
-    ]
-  },
-  'Chelsea': {
-    formation: '4-2-3-1',
-    manager: 'Enzo Maresca',
-    starting: [
-      { num: 1, name: 'Sánchez', pos: 'GK' },
-      { num: 27, name: 'Gusto', pos: 'DF' },
-      { num: 29, name: 'Fofana', pos: 'DF' },
-      { num: 6, name: 'Colwill', pos: 'DF' },
-      { num: 3, name: 'Cucurella', pos: 'DF' },
-      { num: 25, name: 'Caicedo', pos: 'MF' },
-      { num: 45, name: 'Lavia', pos: 'MF' },
-      { num: 11, name: 'Madueke', pos: 'MF' },
-      { num: 20, name: 'Palmer', pos: 'MF' },
-      { num: 19, name: 'Sancho', pos: 'MF' },
-      { num: 15, name: 'Jackson', pos: 'FW' }
-    ],
-    subs: [
-      { num: 12, name: 'Jörgensen', pos: 'GK' },
-      { num: 4, name: 'Adarabioyo', pos: 'DF' },
-      { num: 24, name: 'James', pos: 'DF' },
-      { num: 8, name: 'Fernández', pos: 'MF' },
-      { num: 22, name: 'Dewsbury-Hall', pos: 'MF' },
-      { num: 18, name: 'Nkunku', pos: 'FW' },
-      { num: 7, name: 'Neto', pos: 'FW' },
-      { num: 14, name: 'Félix', pos: 'FW' }
-    ]
-  },
-  'Liverpool': {
-    formation: '4-2-3-1',
-    manager: 'Arne Slot',
-    starting: [
-      { num: 1, name: 'Alisson', pos: 'GK' },
-      { num: 66, name: 'Alexander-Arnold', pos: 'DF' },
-      { num: 5, name: 'Konaté', pos: 'DF' },
-      { num: 4, name: 'Van Dijk', pos: 'DF' },
-      { num: 26, name: 'Robertson', pos: 'DF' },
-      { num: 38, name: 'Gravenberch', pos: 'MF' },
-      { num: 10, name: 'Mac Allister', pos: 'MF' },
-      { num: 11, name: 'Salah', pos: 'MF' },
-      { num: 8, name: 'Szoboszlai', pos: 'MF' },
-      { num: 7, name: 'Díaz', pos: 'MF' },
-      { num: 9, name: 'Núñez', pos: 'FW' }
-    ],
-    subs: [
-      { num: 62, name: 'Kelleher', pos: 'GK' },
-      { num: 2, name: 'Gomez', pos: 'DF' },
-      { num: 21, name: 'Tsimikas', pos: 'DF' },
-      { num: 3, name: 'Endo', pos: 'MF' },
-      { num: 17, name: 'Jones', pos: 'MF' },
-      { num: 19, name: 'Elliott', pos: 'MF' },
-      { num: 18, name: 'Gakpo', pos: 'FW' },
-      { num: 20, name: 'Jota', pos: 'FW' }
-    ]
-  },
-  'Manchester City': {
-    formation: '4-3-3',
-    manager: 'Pep Guardiola',
-    starting: [
-      { num: 31, name: 'Ederson', pos: 'GK' },
-      { num: 2, name: 'Walker', pos: 'DF' },
-      { num: 3, name: 'Rúben Dias', pos: 'DF' },
-      { num: 25, name: 'Akanji', pos: 'DF' },
-      { num: 24, name: 'Gvardiol', pos: 'DF' },
-      { num: 16, name: 'Rodri', pos: 'MF' },
-      { num: 8, name: 'Kovačić', pos: 'MF' },
-      { num: 17, name: 'De Bruyne', pos: 'MF' },
-      { num: 20, name: 'Bernardo Silva', pos: 'FW' },
-      { num: 9, name: 'Haaland', pos: 'FW' },
-      { num: 47, name: 'Foden', pos: 'FW' }
-    ],
-    subs: [
-      { num: 18, name: 'Ortega', pos: 'GK' },
-      { num: 5, name: 'Stones', pos: 'DF' },
-      { num: 6, name: 'Aké', pos: 'DF' },
-      { num: 82, name: 'Lewis', pos: 'DF' },
-      { num: 27, name: 'Matheus Nunes', pos: 'MF' },
-      { num: 19, name: 'Gündoğan', pos: 'MF' },
-      { num: 11, name: 'Doku', pos: 'FW' },
-      { num: 10, name: 'Grealish', pos: 'FW' }
-    ]
-  },
-  'Real Madrid': {
-    formation: '4-3-3',
-    manager: 'Carlo Ancelotti',
-    starting: [
-      { num: 1, name: 'Courtois', pos: 'GK' },
-      { num: 2, name: 'Carvajal', pos: 'DF' },
-      { num: 3, name: 'Militão', pos: 'DF' },
-      { num: 22, name: 'Rüdiger', pos: 'DF' },
-      { num: 23, name: 'Mendy', pos: 'DF' },
-      { num: 14, name: 'Tchouaméni', pos: 'MF' },
-      { num: 8, name: 'Valverde', pos: 'MF' },
-      { num: 5, name: 'Bellingham', pos: 'MF' },
-      { num: 11, name: 'Rodrygo', pos: 'FW' },
-      { num: 9, name: 'Mbappé', pos: 'FW' },
-      { num: 7, name: 'Vinícius Jr.', pos: 'FW' }
-    ],
-    subs: [
-      { num: 13, name: 'Lunin', pos: 'GK' },
-      { num: 17, name: 'Lucas Vázquez', pos: 'DF' },
-      { num: 20, name: 'Fran García', pos: 'DF' },
-      { num: 6, name: 'Camavinga', pos: 'MF' },
-      { num: 10, name: 'Modrić', pos: 'MF' },
-      { num: 19, name: 'Ceballos', pos: 'MF' },
-      { num: 15, name: 'Arda Güler', pos: 'FW' },
-      { num: 16, name: 'Endrick', pos: 'FW' }
-    ]
-  },
-  'Barcelona': {
-    formation: '4-2-3-1',
-    manager: 'Hansi Flick',
-    starting: [
-      { num: 1, name: 'Ter Stegen', pos: 'GK' },
-      { num: 23, name: 'Koundé', pos: 'DF' },
-      { num: 2, name: 'Cubarsí', pos: 'DF' },
-      { num: 5, name: 'Iñigo Martínez', pos: 'DF' },
-      { num: 3, name: 'Balde', pos: 'DF' },
-      { num: 17, name: 'Casadó', pos: 'MF' },
-      { num: 8, name: 'Pedri', pos: 'MF' },
-      { num: 19, name: 'Lamine Yamal', pos: 'MF' },
-      { num: 20, name: 'Dani Olmo', pos: 'MF' },
-      { num: 11, name: 'Raphinha', pos: 'MF' },
-      { num: 9, name: 'Lewandowski', pos: 'FW' }
-    ],
-    subs: [
-      { num: 13, name: 'Iñaki Peña', pos: 'GK' },
-      { num: 4, name: 'Araújo', pos: 'DF' },
-      { num: 24, name: 'Eric García', pos: 'DF' },
-      { num: 6, name: 'Gavi', pos: 'MF' },
-      { num: 21, name: 'De Jong', pos: 'MF' },
-      { num: 16, name: 'Fermín López', pos: 'MF' },
-      { num: 7, name: 'Ferran Torres', pos: 'FW' },
-      { num: 18, name: 'Pau Víctor', pos: 'FW' }
-    ]
-  },
-  'الترجي الرياضي': {
-    formation: '4-3-3',
-    manager: 'Laurențiu Reghecampf',
-    starting: [
-      { num: 1, name: 'بن سعيد', pos: 'GK' },
-      { num: 2, name: 'بن علي', pos: 'DF' },
-      { num: 5, name: 'توغاي', pos: 'DF' },
-      { num: 6, name: 'مرياح', pos: 'DF' },
-      { num: 20, name: 'بن حميدة', pos: 'DF' },
-      { num: 4, name: 'أهولو', pos: 'MF' },
-      { num: 8, name: 'تقا', pos: 'MF' },
-      { num: 10, name: 'ساس', pos: 'MF' },
-      { num: 11, name: 'موكوانا', pos: 'FW' },
-      { num: 9, name: 'رودريغيز', pos: 'FW' },
-      { num: 17, name: 'بلايلي', pos: 'FW' }
-    ],
-    subs: [
-      { num: 16, name: 'دبشي', pos: 'GK' },
-      { num: 13, name: 'بوشنيبة', pos: 'DF' },
-      { num: 15, name: 'عمامو', pos: 'DF' },
-      { num: 18, name: 'أوغبيلو', pos: 'MF' },
-      { num: 21, name: 'دربالي', pos: 'MF' },
-      { num: 7, name: 'سوي', pos: 'FW' },
-      { num: 27, name: 'بوقرة', pos: 'FW' },
-      { num: 19, name: 'بن حمودة', pos: 'FW' }
-    ]
-  },
-  'النادي الإفريقي': {
-    formation: '4-3-3',
-    manager: 'David Bettoni',
-    starting: [
-      { num: 16, name: 'اليفرني', pos: 'GK' },
-      { num: 2, name: 'الزاغلوني', pos: 'DF' },
-      { num: 4, name: 'بوعبيد', pos: 'DF' },
-      { num: 5, name: 'بن عبدة', pos: 'DF' },
-      { num: 24, name: 'الشريفي', pos: 'DF' },
-      { num: 6, name: 'سيماكولا', pos: 'MF' },
-      { num: 8, name: 'الزمزمي', pos: 'MF' },
-      { num: 10, name: 'الصغير', pos: 'MF' },
-      { num: 11, name: 'الخضراوي', pos: 'FW' },
-      { num: 9, name: 'إيدوو', pos: 'FW' },
-      { num: 17, name: 'حمدي العبيدي', pos: 'FW' }
-    ],
-    subs: [
-      { num: 1, name: 'الفرحاتي', pos: 'GK' },
-      { num: 13, name: 'الغرسي', pos: 'DF' },
-      { num: 3, name: 'التينيز', pos: 'DF' },
-      { num: 18, name: 'خليل', pos: 'MF' },
-      { num: 21, name: 'كنيسي', pos: 'MF' },
-      { num: 7, name: 'الصرارفي', pos: 'FW' },
-      { num: 27, name: 'علي يوسف', pos: 'FW' }
-    ]
-  },
-  'النجم الساحلي': {
-    formation: '4-2-3-1',
-    manager: 'Mohamed Mkacher',
-    starting: [
-      { num: 1, name: 'الجمل', pos: 'GK' },
-      { num: 2, name: 'بن نجيمة', pos: 'DF' },
-      { num: 4, name: 'الناوالي', pos: 'DF' },
-      { num: 5, name: 'الغدامسي', pos: 'DF' },
-      { num: 12, name: 'بن علي', pos: 'DF' },
-      { num: 6, name: 'مباي', pos: 'MF' },
-      { num: 8, name: 'الجبلي', pos: 'MF' },
-      { num: 10, name: 'الشماخي', pos: 'MF' },
-      { num: 7, name: 'الضاوي', pos: 'MF' },
-      { num: 11, name: 'العبدلي', pos: 'MF' },
-      { num: 9, name: 'بونغونغا', pos: 'FW' }
-    ],
-    subs: [
-      { num: 16, name: 'القابسي', pos: 'GK' },
-      { num: 3, name: 'بن هلال', pos: 'DF' },
-      { num: 14, name: 'العوادي', pos: 'MF' },
-      { num: 18, name: 'سيدومار', pos: 'MF' },
-      { num: 20, name: 'بن شويخة', pos: 'FW' },
-      { num: 22, name: 'البريقي', pos: 'FW' }
-    ]
-  },
-  'النادي الصفاقسي': {
-    formation: '4-3-3',
-    manager: 'Alexandre Santos',
-    starting: [
-      { num: 1, name: 'دحمان', pos: 'GK' },
-      { num: 2, name: 'المحمودي', pos: 'DF' },
-      { num: 4, name: 'النصراوي', pos: 'DF' },
-      { num: 5, name: 'الزموري', pos: 'DF' },
-      { num: 3, name: 'السايحي', pos: 'DF' },
-      { num: 6, name: 'كوامي', pos: 'MF' },
-      { num: 8, name: 'كونتي', pos: 'MF' },
-      { num: 10, name: 'الحبوبي', pos: 'MF' },
-      { num: 11, name: 'بركات', pos: 'FW' },
-      { num: 9, name: 'الدريدي', pos: 'FW' },
-      { num: 7, name: 'كانتي', pos: 'FW' }
-    ],
-    subs: [
-      { num: 16, name: 'قعلول', pos: 'GK' },
-      { num: 12, name: 'الهمامي', pos: 'DF' },
-      { num: 14, name: 'بن علي', pos: 'MF' },
-      { num: 18, name: 'الدربالي', pos: 'MF' },
-      { num: 19, name: 'تراوري', pos: 'FW' }
-    ]
-  }
-};
-
-// Realistic pools of names for fallback rosters (eliminating any generic "TeamName GK" placeholders)
-const ARABIC_ROSTER_POOL = {
-  gk: ['بن سعيد', 'معز حسن', 'دحمان', 'الفرحاتي', 'الجميل', 'القصراوي', 'البوعزيزي'],
-  df: ['مرياح', 'توغاي', 'بن حميدة', 'بوشنيبة', 'الغدامسي', 'الزموري', 'النصراوي', 'بن عبدة', 'بوعبيد', 'الشريفي', 'بن علي', 'الزاغلوني', 'كشيدة', 'العبدلي'],
-  mf: ['أهولو', 'تقا', 'ساس', 'الزمزمي', 'الصغير', 'سيماكولا', 'الشماخي', 'خليل', 'كوامي', 'الجبلي', 'الدربالي', 'الضاوي', 'السخيري', 'العيدوني'],
-  fw: ['بلايلي', 'رودريغيز', 'موكوانا', 'الخضراوي', 'إيدوو', 'العبيدي', 'بونغونغا', 'بركات', 'الدريدي', 'كانتي', 'سوي', 'الجزيري', 'المساكني'],
-  managers: ['فوزي البنزرتي', 'جلال القادري', 'نبيل معلول', 'راضي الجعايدي', 'منذر الكبير', 'لسعد جردة']
-};
-
-const INTL_ROSTER_POOL = {
-  gk: ['Martinez', 'Silva', 'Costa', 'Sommer', 'Pope', 'Leno', 'Simon', 'Trapp', 'Raya'],
-  df: ['Davies', 'Romero', 'Dias', 'Hernandez', 'Gomez', 'White', 'Bastoni', 'Akanji', 'Botman', 'Tah', 'Guéhi', 'Milenković', 'Konaté', 'Saliba'],
-  mf: ['Fernandez', 'Neves', 'Ruiz', 'Silva', 'Barella', 'Palhinha', 'Tielemans', 'Locatelli', 'Merino', 'Zubimendi', 'Kamara', 'Tonali', 'Rice', 'Mac Allister'],
-  fw: ['Alvarez', 'Watkins', 'Isak', 'Cunha', 'Williams', 'Jackson', 'Nunez', 'Gakpo', 'Lookman', 'Sesko', 'Bowen', 'Openda', 'Saka', 'Havertz'],
-  managers: ['Marco Silva', 'Roberto De Zerbi', 'Ruben Amorim', 'Thiago Motta', 'Unai Emery', 'Andoni Iraola', 'Thomas Frank']
-};
-
-function hashString(str = '') {
-  let h = 0;
-  for (let i = 0; i < str.length; i++) {
-    h = (Math.imul(31, h) + str.charCodeAt(i)) | 0;
-  }
-  return Math.abs(h);
-}
-
-// Generates dynamic realistic roster for any club not explicitly hardcoded
-function generateFallbackRoster(teamName, isHome) {
-  const formation = isHome ? '4-3-3' : '4-2-3-1';
-  const nameStr = String(teamName || 'Team');
-  const isArabic = /[\u0600-\u06FF]/.test(nameStr);
-  const pool = isArabic ? ARABIC_ROSTER_POOL : INTL_ROSTER_POOL;
-  const hBase = hashString(nameStr) + (isHome ? 17 : 43);
-
-  const pick = (arr, offset) => arr[(hBase + offset) % arr.length];
-
-  const starting = [
-    { num: 1, name: pick(pool.gk, 0), pos: 'GK', photo: null },
-    { num: 2, name: pick(pool.df, 1), pos: 'DF', photo: null },
-    { num: 4, name: pick(pool.df, 2), pos: 'DF', photo: null },
-    { num: 5, name: pick(pool.df, 3), pos: 'DF', photo: null },
-    { num: 3, name: pick(pool.df, 4), pos: 'DF', photo: null },
-    { num: 6, name: pick(pool.mf, 5), pos: 'MF', photo: null },
-    { num: 8, name: pick(pool.mf, 6), pos: 'MF', photo: null },
-    { num: 10, name: pick(pool.mf, 7), pos: 'MF', photo: null },
-    { num: 7, name: pick(pool.fw, 8), pos: 'FW', photo: null },
-    { num: 9, name: pick(pool.fw, 9), pos: 'FW', photo: null },
-    { num: 11, name: pick(pool.fw, 10), pos: 'FW', photo: null }
-  ];
-
-  const subs = [
-    { num: 12, name: pick(pool.gk, 11), pos: 'GK', photo: null },
-    { num: 13, name: pick(pool.df, 12), pos: 'DF', photo: null },
-    { num: 14, name: pick(pool.df, 13), pos: 'DF', photo: null },
-    { num: 15, name: pick(pool.mf, 14), pos: 'MF', photo: null },
-    { num: 16, name: pick(pool.mf, 15), pos: 'MF', photo: null },
-    { num: 17, name: pick(pool.fw, 16), pos: 'FW', photo: null },
-    { num: 19, name: pick(pool.fw, 17), pos: 'FW', photo: null }
-  ];
-
-  return {
-    formation,
-    manager: pick(pool.managers, 0),
-    starting,
-    subs
-  };
-}
-
 // Flashscore-style rating color theme (Green > 7.5, Amber/Orange 6-7.4, Red < 6)
 function getRatingStyle(ratingVal) {
   if (ratingVal === null || ratingVal === undefined || ratingVal === '') return null;
@@ -385,103 +50,6 @@ function getRatingStyle(ratingVal) {
     border: 'border-[#E53935]/60',
     shadow: 'shadow-rose-950/40',
     label: r.toFixed(1)
-  };
-}
-
-// Enriches roster with realistic ratings & match events if match is finished or live
-function enrichRosterEventsAndRatings(roster, isHome, match, isRealLineup = false) {
-  if (!roster || !Array.isArray(roster.starting)) return roster;
-
-  // Real authenticated lineups from Flashscore should never be overwritten with fabricated events
-  if (isRealLineup) {
-    return roster;
-  }
-
-  const isFinished = match.status === 'FINISHED' || match.live_clock === 'FT';
-  const isLive = match.status === 'IN_PLAY' || match.status === 'PAUSED';
-  if (!isFinished && !isLive) {
-    // Scheduled fixtures: show clean rosters without past events or ratings
-    return roster;
-  }
-
-  const hScore = Number(match.home_score ?? 1);
-  const aScore = Number(match.away_score ?? 0);
-  const myGoals = isHome ? hScore : aScore;
-  const oppGoals = isHome ? aScore : hScore;
-  const won = myGoals > oppGoals;
-  const drew = myGoals === oppGoals;
-
-  const hasRealEvents = roster.starting.some((p) => Array.isArray(p.events) && p.events.length > 0);
-  const hasRealRatings = roster.starting.some((p) => Boolean(p.rating));
-
-  let goalsToAssign = myGoals;
-  let assistsToAssign = Math.min(myGoals, 2);
-
-  const enrichedStarting = roster.starting.map((p, idx) => {
-    // 1. Rating
-    let rating = p.rating;
-    if (!rating) {
-      let baseRating = won ? 7.4 : drew ? 6.7 : 6.1;
-      const seed = hashString((p.name || '') + (match.id || 1) + (isHome ? 'H' : 'A'));
-      const variance = (seed % 15) / 10 - 0.7; // -0.7 to +0.7
-      let calcRating = baseRating + variance;
-      if (idx === 9 && myGoals > 0) calcRating += 0.9; // Star striker bonus
-      if (idx === 0 && oppGoals === 0) calcRating += 0.7; // Clean sheet GK bonus
-      if (idx === 0 && oppGoals >= 3) calcRating -= 0.8; // High concession GK penalty
-      rating = Math.min(9.4, Math.max(5.3, calcRating)).toFixed(1);
-    }
-
-    // 2. Events (goals, assists, cards, subs)
-    let events = Array.isArray(p.events) ? [...p.events] : [];
-    if (!hasRealEvents) {
-      if (goalsToAssign > 0 && (p.pos === 'FW' || idx === 9 || idx === 10 || idx === 8)) {
-        const count = goalsToAssign >= 2 && idx === 9 ? 2 : 1;
-        events.push({ type: 'goal', count, minute: `${20 + idx * 5}'` });
-        goalsToAssign -= count;
-      }
-      if (assistsToAssign > 0 && (p.pos === 'MF' || idx === 7 || idx === 6)) {
-        events.push({ type: 'assist', minute: `${19 + idx * 5}'` });
-        assistsToAssign--;
-      }
-      if (idx === 3 || idx === 4) {
-        const cardSeed = (hashString(p.name || '') + (match.id || 1)) % 5;
-        if (cardSeed === 0) {
-          events.push({ type: 'yellow_card', minute: `${55 + idx * 3}'` });
-        }
-      }
-      if (idx === 10 && (isFinished || isLive)) {
-        events.push({ type: 'sub', minute: "68'" });
-      }
-    }
-
-    return {
-      ...p,
-      rating,
-      events
-    };
-  });
-
-  const enrichedSubs = (roster.subs || []).map((p, idx) => {
-    let rating = p.rating;
-    let events = Array.isArray(p.events) ? [...p.events] : [];
-    if (!hasRealRatings && (isFinished || isLive)) {
-      if (idx === 0 || idx === 1) {
-        events.push({ type: 'sub', minute: `${65 + idx * 8}'` });
-        const subBase = won ? 6.8 : 6.2;
-        rating = (subBase + ((hashString(p.name || '') % 11) / 10 - 0.5)).toFixed(1);
-      }
-    }
-    return {
-      ...p,
-      rating,
-      events
-    };
-  });
-
-  return {
-    ...roster,
-    starting: enrichedStarting,
-    subs: enrichedSubs
   };
 }
 
@@ -601,14 +169,11 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
     realLineups?.startingAway && realLineups.startingAway.length >= 11
   );
 
-  const fallbackHome = KNOWN_ROSTERS[match.home_team] || generateFallbackRoster(match.home_team, true);
-  const fallbackAway = KNOWN_ROSTERS[match.away_team] || generateFallbackRoster(match.away_team, false);
-
-  // For finished matches, NEVER render fake mock players if real lineups are unavailable
-  const rawHomeRoster = hasRealLineups
+  // Lineups are strictly resolved from authentic Flashscore data; NO mock or random players are ever used
+  const homeRoster = hasRealLineups
     ? {
-        formation: realLineups.formationHome || fallbackHome.formation,
-        manager: realLineups.managerHome || fallbackHome.manager,
+        formation: realLineups.formationHome || '4-3-3',
+        manager: realLineups.managerHome || null,
         starting: realLineups.startingHome.map((p, idx) => ({
           num: p.num ?? (idx + 1),
           name: p.name || `Player ${idx + 1}`,
@@ -626,12 +191,12 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
           events: Array.isArray(p.events) ? p.events : []
         }))
       }
-    : (finished ? null : fallbackHome);
+    : null;
 
-  const rawAwayRoster = hasRealLineups
+  const awayRoster = hasRealLineups
     ? {
-        formation: realLineups.formationAway || fallbackAway.formation,
-        manager: realLineups.managerAway || fallbackAway.manager,
+        formation: realLineups.formationAway || '4-3-3',
+        manager: realLineups.managerAway || null,
         starting: realLineups.startingAway.map((p, idx) => ({
           num: p.num ?? (idx + 1),
           name: p.name || `Player ${idx + 1}`,
@@ -649,10 +214,7 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
           events: Array.isArray(p.events) ? p.events : []
         }))
       }
-    : (finished ? null : fallbackAway);
-
-  const homeRoster = rawHomeRoster ? enrichRosterEventsAndRatings(rawHomeRoster, true, match, hasRealLineups) : null;
-  const awayRoster = rawAwayRoster ? enrichRosterEventsAndRatings(rawAwayRoster, false, match, hasRealLineups) : null;
+    : null;
 
   // Resolve Stats (Real from Flashscore if available, else generated realistic mock)
   let parsedRealStats = null;
@@ -923,222 +485,204 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
           {/* TAB 2: LINEUPS & SOCCER PITCH */}
           {activeTab === 'lineups' && (
             <div className="space-y-6">
-              {/* Formations Header Bar */}
-              <div className="flex items-center justify-between bg-[#14181B] border border-white/5 rounded-2xl p-3 text-xs sm:text-sm font-bold">
-                <div className="flex items-center gap-2">
-                  <span className="h-3 w-3 rounded-full bg-emerald-500" />
-                  <span className="text-white font-extrabold">{match.home_team}</span>
-                  {homeRoster?.formation && (
-                    <span className="text-emerald-400 font-mono">({homeRoster.formation})</span>
-                  )}
+              {loadingDetails ? (
+                /* 1. Loading State */
+                <div className="flex flex-col items-center justify-center p-12 text-center rounded-3xl border border-white/10 bg-[#14181B] shadow-xl my-4 space-y-3">
+                  <div className="h-10 w-10 animate-spin rounded-full border-3 border-[#53FC18] border-t-transparent" />
+                  <h4 className="text-sm font-black text-white">
+                    {isAr ? 'جاري جلب التشكيلات الرسمية...' : 'Loading official lineups...'}
+                  </h4>
                 </div>
-                <div className="flex items-center gap-2">
-                  {awayRoster?.formation && (
-                    <span className="text-amber-400 font-mono">({awayRoster.formation})</span>
-                  )}
-                  <span className="text-white font-extrabold">{match.away_team}</span>
-                  <span className="h-3 w-3 rounded-full bg-amber-500" />
-                </div>
-              </div>
-
-              {/* CSS Tactical Soccer Pitch */}
-              <div className="relative mx-auto w-full max-w-[560px] aspect-[2/3] min-h-[580px] rounded-3xl border-2 border-white/30 bg-[#165B33] shadow-2xl overflow-hidden select-none">
-                {/* Grass Striping Pattern */}
-                <div className="absolute inset-0 bg-[repeating-linear-gradient(to_bottom,#165B33_0px,#165B33_40px,#134F2C_40px,#134F2C_80px)] opacity-90" />
-
-                {/* Outer Field Lines */}
-                <div className="absolute inset-2 sm:inset-3 border-2 border-white/40 rounded-xl pointer-events-none" />
-
-                {/* Halfway Line & Center Circle */}
-                <div className="absolute top-1/2 left-2 right-2 sm:left-3 sm:right-3 border-t-2 border-white/40 -translate-y-1/2 pointer-events-none" />
-                <div className="absolute top-1/2 left-1/2 h-24 w-24 sm:h-28 sm:w-28 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white/40 pointer-events-none" />
-                <div className="absolute top-1/2 left-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white/60 pointer-events-none" />
-
-                {/* Top Penalty Box (Away Defense / Home Attack) */}
-                <div className="absolute top-2 sm:top-3 left-1/2 -translate-x-1/2 w-44 sm:w-56 h-20 sm:h-24 border-b-2 border-x-2 border-white/40 bg-white/[0.02] pointer-events-none" />
-                <div className="absolute top-2 sm:top-3 left-1/2 -translate-x-1/2 w-20 sm:w-28 h-8 sm:h-10 border-b-2 border-x-2 border-white/40 pointer-events-none" />
-                <div className="absolute top-16 sm:top-20 left-1/2 -translate-x-1/2 h-1.5 w-1.5 rounded-full bg-white/60 pointer-events-none" />
-
-                {/* Bottom Penalty Box (Home Defense / Away Attack) */}
-                <div className="absolute bottom-2 sm:bottom-3 left-1/2 -translate-x-1/2 w-44 sm:w-56 h-20 sm:h-24 border-t-2 border-x-2 border-white/40 bg-white/[0.02] pointer-events-none" />
-                <div className="absolute bottom-2 sm:bottom-3 left-1/2 -translate-x-1/2 w-20 sm:w-28 h-8 sm:h-10 border-t-2 border-x-2 border-white/40 pointer-events-none" />
-                <div className="absolute bottom-16 sm:bottom-20 left-1/2 -translate-x-1/2 h-1.5 w-1.5 rounded-full bg-white/60 pointer-events-none" />
-
-                {/* State-specific Content on the Pitch */}
-                {loadingDetails ? (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center z-10 bg-black/50 backdrop-blur-sm">
-                    <div className="flex flex-col items-center max-w-sm rounded-2xl border border-white/10 bg-[#0E1214]/90 p-6 shadow-2xl space-y-3">
-                      <div className="h-9 w-9 animate-spin rounded-full border-3 border-[#53FC18] border-t-transparent" />
-                      <h4 className="text-sm font-black text-white">
-                        {isAr ? 'جاري جلب التشكيلات الحقيقية...' : 'Loading match lineups...'}
-                      </h4>
-                    </div>
+              ) : !hasRealLineups ? (
+                /* 2. Explicit Fallback UI: Lineups Not Available (Pitch Hidden) */
+                <div className="flex flex-col items-center justify-center py-16 px-6 text-center rounded-3xl border border-white/10 bg-[#14181B] shadow-2xl my-2 space-y-4">
+                  <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-white/5 border border-white/10 text-4xl shadow-inner">
+                    📋
                   </div>
-                ) : finished && !hasRealLineups ? (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center z-10 bg-black/45 backdrop-blur-[2px]">
-                    <div className="flex flex-col items-center max-w-sm rounded-2xl border border-white/10 bg-[#0E1214]/95 p-6 shadow-2xl space-y-3">
-                      <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/5 border border-white/10 text-3xl shadow-inner">
-                        📋
-                      </div>
-                      <div className="space-y-1">
-                        <h4 className="text-base font-black text-white">
-                          {isAr ? 'التشكيلات غير متوفرة لهذه المباراة' : 'Lineups not available for this match'}
-                        </h4>
-                        <p className="text-xs text-gray-400 leading-relaxed">
-                          {isAr
-                            ? 'لم يتم تزويد بيانات التشكيلة الرسمية لهذه المواجهة من المصدر.'
-                            : 'Official lineup data was not provided for this fixture.'}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    {/* AWAY PLAYERS (TOP HALF) */}
-                    {awayRoster && renderTacticalFormation(awayRoster.starting, awayRoster.formation, false)}
-
-                    {/* HOME PLAYERS (BOTTOM HALF) */}
-                    {homeRoster && renderTacticalFormation(homeRoster.starting, homeRoster.formation, true)}
-                  </>
-                )}
-              </div>
-
-              {/* ================= BENCH & MANAGERS ================= */}
-              {finished && !hasRealLineups && !loadingDetails ? (
-                <div className="rounded-2xl border border-white/10 bg-[#14181B] p-6 text-center">
-                  <div className="flex flex-col items-center justify-center py-3 space-y-2">
-                    <span className="text-2xl">👥</span>
-                    <h5 className="text-sm font-black text-gray-300">
-                      {isAr ? 'قائمة البدلاء غير متوفرة' : 'Substitutes not available'}
-                    </h5>
-                    <p className="text-xs text-gray-500">
+                  <div className="space-y-1.5 max-w-sm">
+                    <h4 className="text-base sm:text-lg font-black text-white">
+                      {isAr ? '📋 التشكيلات غير متوفرة' : '📋 Lineups not available'}
+                    </h4>
+                    <p className="text-xs sm:text-sm text-gray-400 leading-relaxed">
                       {isAr
-                        ? 'بيانات دكة البدلاء غير مسجلة لهذه المباراة'
-                        : 'Substitutes bench data is not recorded for this match'}
+                        ? 'لم يتم تزويد أو اعتماد بيانات التشكيلة الرسمية لهذه المواجهة حتى الآن.'
+                        : 'Official lineups have not been announced or provided for this fixture yet.'}
                     </p>
                   </div>
                 </div>
-              ) : homeRoster && awayRoster ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Home Substitutes Card */}
-                  <div className="rounded-2xl border border-white/10 bg-[#14181B] p-4 space-y-3">
-                    <div className="flex items-center justify-between border-b border-white/5 pb-2">
-                      <span className="text-xs font-black uppercase text-emerald-400">
-                        {isAr ? 'بدلاء' : 'Substitutes'} • {match.home_team}
-                      </span>
-                      <span className="text-[11px] text-gray-400">
-                        {isAr ? 'المدرب:' : 'Coach:'} <strong className="text-white">{homeRoster.manager}</strong>
-                      </span>
+              ) : (
+                /* 3. Real Lineups Available: Formations Bar, Pitch, and Bench */
+                <>
+                  {/* Formations Header Bar */}
+                  <div className="flex items-center justify-between bg-[#14181B] border border-white/5 rounded-2xl p-3 text-xs sm:text-sm font-bold">
+                    <div className="flex items-center gap-2">
+                      <span className="h-3 w-3 rounded-full bg-emerald-500" />
+                      <span className="text-white font-extrabold">{match.home_team}</span>
+                      <span className="text-emerald-400 font-mono">({homeRoster.formation})</span>
                     </div>
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                      {homeRoster.subs.map((p, idx) => {
-                        const subRating = getRatingStyle(p.rating);
-                        return (
-                          <div
-                            key={`${p.num || idx}-${p.name}`}
-                            className="flex items-center gap-2 rounded-xl bg-black/40 p-1.5 border border-white/5 hover:border-emerald-500/30 transition"
-                          >
-                            <PlayerAvatar
-                              photo={p.photo}
-                              name={p.name}
-                              num={p.num}
-                              isHome={true}
-                              pos={p.pos}
-                              size="sm"
-                            />
-                            <div className="flex flex-col min-w-0 flex-1">
-                              <div className="flex items-center gap-1">
-                                <span className="truncate text-gray-200 font-bold text-xs">{p.name}</span>
-                                {p.events && p.events.length > 0 && (
-                                  <span className="inline-flex items-center gap-0.5 text-[9px]">
-                                    {p.events.map((ev, i) => (
-                                      <span key={i}>
-                                        {ev.type === 'goal' && '⚽'}
-                                        {ev.type === 'assist' && '👟'}
-                                        {ev.type === 'yellow_card' && '🟨'}
-                                        {ev.type === 'red_card' && '🟥'}
-                                        {ev.type === 'sub' && '🔄'}
-                                      </span>
-                                    ))}
-                                  </span>
-                                )}
-                              </div>
-                              <span className="text-[10px] text-gray-500 uppercase font-mono">{p.pos || 'SUB'}</span>
-                            </div>
-
-                            {subRating && (
-                              <span
-                                className={`px-1.5 py-0.5 rounded-md font-mono font-black text-[10px] shadow-sm ${subRating.bg} ${subRating.text}`}
-                              >
-                                {subRating.label}
-                              </span>
-                            )}
-                          </div>
-                        );
-                      })}
+                    <div className="flex items-center gap-2">
+                      <span className="text-amber-400 font-mono">({awayRoster.formation})</span>
+                      <span className="text-white font-extrabold">{match.away_team}</span>
+                      <span className="h-3 w-3 rounded-full bg-amber-500" />
                     </div>
                   </div>
 
-                  {/* Away Substitutes Card */}
-                  <div className="rounded-2xl border border-white/10 bg-[#14181B] p-4 space-y-3">
-                    <div className="flex items-center justify-between border-b border-white/5 pb-2">
-                      <span className="text-xs font-black uppercase text-amber-400">
-                        {isAr ? 'بدلاء' : 'Substitutes'} • {match.away_team}
-                      </span>
-                      <span className="text-[11px] text-gray-400">
-                        {isAr ? 'المدرب:' : 'Coach:'} <strong className="text-white">{awayRoster.manager}</strong>
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                      {awayRoster.subs.map((p, idx) => {
-                        const subRating = getRatingStyle(p.rating);
-                        return (
-                          <div
-                            key={`${p.num || idx}-${p.name}`}
-                            className="flex items-center gap-2 rounded-xl bg-black/40 p-1.5 border border-white/5 hover:border-amber-500/30 transition"
-                          >
-                            <PlayerAvatar
-                              photo={p.photo}
-                              name={p.name}
-                              num={p.num}
-                              isHome={false}
-                              pos={p.pos}
-                              size="sm"
-                            />
-                            <div className="flex flex-col min-w-0 flex-1">
-                              <div className="flex items-center gap-1">
-                                <span className="truncate text-gray-200 font-bold text-xs">{p.name}</span>
-                                {p.events && p.events.length > 0 && (
-                                  <span className="inline-flex items-center gap-0.5 text-[9px]">
-                                    {p.events.map((ev, i) => (
-                                      <span key={i}>
-                                        {ev.type === 'goal' && '⚽'}
-                                        {ev.type === 'assist' && '👟'}
-                                        {ev.type === 'yellow_card' && '🟨'}
-                                        {ev.type === 'red_card' && '🟥'}
-                                        {ev.type === 'sub' && '🔄'}
-                                      </span>
-                                    ))}
-                                  </span>
-                                )}
-                              </div>
-                              <span className="text-[10px] text-gray-500 uppercase font-mono">{p.pos || 'SUB'}</span>
-                            </div>
+                  {/* CSS Tactical Soccer Pitch */}
+                  <div className="relative mx-auto w-full max-w-[560px] aspect-[2/3] min-h-[580px] rounded-3xl border-2 border-white/30 bg-[#165B33] shadow-2xl overflow-hidden select-none">
+                    {/* Grass Striping Pattern */}
+                    <div className="absolute inset-0 bg-[repeating-linear-gradient(to_bottom,#165B33_0px,#165B33_40px,#134F2C_40px,#134F2C_80px)] opacity-90" />
 
-                            {subRating && (
-                              <span
-                                className={`px-1.5 py-0.5 rounded-md font-mono font-black text-[10px] shadow-sm ${subRating.bg} ${subRating.text}`}
-                              >
-                                {subRating.label}
-                              </span>
-                            )}
-                          </div>
-                        );
-                      })}
+                    {/* Outer Field Lines */}
+                    <div className="absolute inset-2 sm:inset-3 border-2 border-white/40 rounded-xl pointer-events-none" />
+
+                    {/* Halfway Line & Center Circle */}
+                    <div className="absolute top-1/2 left-2 right-2 sm:left-3 sm:right-3 border-t-2 border-white/40 -translate-y-1/2 pointer-events-none" />
+                    <div className="absolute top-1/2 left-1/2 h-24 w-24 sm:h-28 sm:w-28 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white/40 pointer-events-none" />
+                    <div className="absolute top-1/2 left-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white/60 pointer-events-none" />
+
+                    {/* Top Penalty Box (Away Defense / Home Attack) */}
+                    <div className="absolute top-2 sm:top-3 left-1/2 -translate-x-1/2 w-44 sm:w-56 h-20 sm:h-24 border-b-2 border-x-2 border-white/40 bg-white/[0.02] pointer-events-none" />
+                    <div className="absolute top-2 sm:top-3 left-1/2 -translate-x-1/2 w-20 sm:w-28 h-8 sm:h-10 border-b-2 border-x-2 border-white/40 pointer-events-none" />
+                    <div className="absolute top-16 sm:top-20 left-1/2 -translate-x-1/2 h-1.5 w-1.5 rounded-full bg-white/60 pointer-events-none" />
+
+                    {/* Bottom Penalty Box (Home Defense / Away Attack) */}
+                    <div className="absolute bottom-2 sm:bottom-3 left-1/2 -translate-x-1/2 w-44 sm:w-56 h-20 sm:h-24 border-t-2 border-x-2 border-white/40 bg-white/[0.02] pointer-events-none" />
+                    <div className="absolute bottom-2 sm:bottom-3 left-1/2 -translate-x-1/2 w-20 sm:w-28 h-8 sm:h-10 border-t-2 border-x-2 border-white/40 pointer-events-none" />
+                    <div className="absolute bottom-16 sm:bottom-20 left-1/2 -translate-x-1/2 h-1.5 w-1.5 rounded-full bg-white/60 pointer-events-none" />
+
+                    {/* AWAY PLAYERS (TOP HALF) */}
+                    {renderTacticalFormation(awayRoster.starting, awayRoster.formation, false)}
+
+                    {/* HOME PLAYERS (BOTTOM HALF) */}
+                    {renderTacticalFormation(homeRoster.starting, homeRoster.formation, true)}
+                  </div>
+
+                  {/* ================= BENCH & MANAGERS ================= */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Home Substitutes Card */}
+                    <div className="rounded-2xl border border-white/10 bg-[#14181B] p-4 space-y-3">
+                      <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                        <span className="text-xs font-black uppercase text-emerald-400">
+                          {isAr ? 'بدلاء' : 'Substitutes'} • {match.home_team}
+                        </span>
+                        {homeRoster.manager && (
+                          <span className="text-[11px] text-gray-400">
+                            {isAr ? 'المدرب:' : 'Coach:'} <strong className="text-white">{homeRoster.manager}</strong>
+                          </span>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        {homeRoster.subs.map((p, idx) => {
+                          const subRating = getRatingStyle(p.rating);
+                          return (
+                            <div
+                              key={`${p.num || idx}-${p.name}`}
+                              className="flex items-center gap-2 rounded-xl bg-black/40 p-1.5 border border-white/5 hover:border-emerald-500/30 transition"
+                            >
+                              <PlayerAvatar
+                                photo={p.photo}
+                                name={p.name}
+                                num={p.num}
+                                isHome={true}
+                                pos={p.pos}
+                                size="sm"
+                              />
+                              <div className="flex flex-col min-w-0 flex-1">
+                                <div className="flex items-center gap-1">
+                                  <span className="truncate text-gray-200 font-bold text-xs">{p.name}</span>
+                                  {p.events && p.events.length > 0 && (
+                                    <span className="inline-flex items-center gap-0.5 text-[9px]">
+                                      {p.events.map((ev, i) => (
+                                        <span key={i}>
+                                          {ev.type === 'goal' && '⚽'}
+                                          {ev.type === 'assist' && '👟'}
+                                          {ev.type === 'yellow_card' && '🟨'}
+                                          {ev.type === 'red_card' && '🟥'}
+                                          {ev.type === 'sub' && '🔄'}
+                                        </span>
+                                      ))}
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="text-[10px] text-gray-500 uppercase font-mono">{p.pos || 'SUB'}</span>
+                              </div>
+
+                              {subRating && (
+                                <span
+                                  className={`px-1.5 py-0.5 rounded-md font-mono font-black text-[10px] shadow-sm ${subRating.bg} ${subRating.text}`}
+                                >
+                                  {subRating.label}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Away Substitutes Card */}
+                    <div className="rounded-2xl border border-white/10 bg-[#14181B] p-4 space-y-3">
+                      <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                        <span className="text-xs font-black uppercase text-amber-400">
+                          {isAr ? 'بدلاء' : 'Substitutes'} • {match.away_team}
+                        </span>
+                        {awayRoster.manager && (
+                          <span className="text-[11px] text-gray-400">
+                            {isAr ? 'المدرب:' : 'Coach:'} <strong className="text-white">{awayRoster.manager}</strong>
+                          </span>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        {awayRoster.subs.map((p, idx) => {
+                          const subRating = getRatingStyle(p.rating);
+                          return (
+                            <div
+                              key={`${p.num || idx}-${p.name}`}
+                              className="flex items-center gap-2 rounded-xl bg-black/40 p-1.5 border border-white/5 hover:border-amber-500/30 transition"
+                            >
+                              <PlayerAvatar
+                                photo={p.photo}
+                                name={p.name}
+                                num={p.num}
+                                isHome={false}
+                                pos={p.pos}
+                                size="sm"
+                              />
+                              <div className="flex flex-col min-w-0 flex-1">
+                                <div className="flex items-center gap-1">
+                                  <span className="truncate text-gray-200 font-bold text-xs">{p.name}</span>
+                                  {p.events && p.events.length > 0 && (
+                                    <span className="inline-flex items-center gap-0.5 text-[9px]">
+                                      {p.events.map((ev, i) => (
+                                        <span key={i}>
+                                          {ev.type === 'goal' && '⚽'}
+                                          {ev.type === 'assist' && '👟'}
+                                          {ev.type === 'yellow_card' && '🟨'}
+                                          {ev.type === 'red_card' && '🟥'}
+                                          {ev.type === 'sub' && '🔄'}
+                                        </span>
+                                      ))}
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="text-[10px] text-gray-500 uppercase font-mono">{p.pos || 'SUB'}</span>
+                              </div>
+
+                              {subRating && (
+                                <span
+                                  className={`px-1.5 py-0.5 rounded-md font-mono font-black text-[10px] shadow-sm ${subRating.bg} ${subRating.text}`}
+                                >
+                                  {subRating.label}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ) : null}
+                </>
+              )}
             </div>
           )}
         </div>

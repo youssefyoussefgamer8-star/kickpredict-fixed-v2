@@ -644,7 +644,7 @@ function parseFlashscoreLineups(rawText) {
  * Fetches in-depth live match details (stats, incidents, lineups) for a specific match.
  */
 async function fetchMatchLiveDetails(matchRawId, { fetcher = fetch } = {}) {
-  if (!matchRawId) return { stats: [], incidents: [], lineups: null };
+  if (!matchRawId) return { stats: [], incidents: [], lineups: null, scores: null, period: null };
   const [stText, suiText, liText] = await Promise.allSettled([
     fetchFlashscoreFeed(`df_st_1_${matchRawId}`, { fetcher }),
     fetchFlashscoreFeed(`df_sui_1_${matchRawId}`, { fetcher }),
@@ -659,6 +659,23 @@ async function fetchMatchLiveDetails(matchRawId, { fetcher = fetch } = {}) {
   const stats = stText.status === 'fulfilled' ? parseFlashscoreStats(stText.value) : [];
   const incidents = suiText.status === 'fulfilled' ? parseFlashscoreIncidents(suiText.value) : [];
   let lineups = liText.status === 'fulfilled' ? parseFlashscoreLineups(liText.value) : null;
+
+  let scores = null;
+  let period = null;
+  if (suiText.status === 'fulfilled' && suiText.value) {
+    const rawSui = suiText.value;
+    const scoreMatch = rawSui.match(/IG÷(\d+)¬IH÷(\d+)/);
+    if (scoreMatch) {
+      scores = {
+        home: parseInt(scoreMatch[1], 10),
+        away: parseInt(scoreMatch[2], 10)
+      };
+    }
+    const periodMatch = rawSui.match(/AC÷([^¬]+)/);
+    if (periodMatch) {
+      period = periodMatch[1].trim();
+    }
+  }
 
   if (lineups) {
     console.log(`[Flashscore Details] Lineups successfully parsed for ${matchRawId}: ${lineups.startingHome.length} home, ${lineups.startingAway.length} away players.`);
@@ -710,7 +727,9 @@ async function fetchMatchLiveDetails(matchRawId, { fetcher = fetch } = {}) {
   return {
     stats,
     incidents,
-    lineups
+    lineups,
+    scores,
+    period
   };
 }
 
@@ -951,8 +970,8 @@ async function smartLivePolling(
        WHERE status IN ('IN_PLAY', 'PAUSED')
           OR (
             status IN ('TIMED', 'SCHEDULED')
-            AND utc_date <= NOW()
-            AND utc_date >= NOW() - INTERVAL '135 minutes'
+            AND utc_date <= NOW() + INTERVAL '30 minutes'
+            AND utc_date >= NOW() - INTERVAL '180 minutes'
           )
        ORDER BY utc_date ASC`
     );
@@ -1291,6 +1310,7 @@ function initFlashscoreSync({ pool, cron, settleFinishedMatches, reconcileScoreC
       await ensureFlashscoreColumns(pool);
       await syncFlashscoreSchedule(pool, { startDay: -1, endDay: 7, settleFinishedMatches });
       await syncStandings(pool);
+      await smartLivePolling(pool, { settleFinishedMatches, reconcileScoreCorrections });
       if (typeof settleFinishedMatches === 'function') {
         await settleFinishedMatches();
       }
