@@ -1,5 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { api } from '../utils/api';
+import { api, API_BASE } from '../utils/api';
+
+function getProxiedImageUrl(url) {
+  if (!url || typeof url !== 'string') return null;
+  if (url.includes('static.flashscore.com') || url.includes('flashscore.com')) {
+    return `${API_BASE}/image-proxy?url=${encodeURIComponent(url)}`;
+  }
+  return url;
+}
 
 const LEAGUE_LOGOS = {
   PL: 'https://static.flashscore.com/res/image/data/rN76jpW1-naArgzhi.png',
@@ -381,8 +389,13 @@ function getRatingStyle(ratingVal) {
 }
 
 // Enriches roster with realistic ratings & match events if match is finished or live
-function enrichRosterEventsAndRatings(roster, isHome, match) {
+function enrichRosterEventsAndRatings(roster, isHome, match, isRealLineup = false) {
   if (!roster || !Array.isArray(roster.starting)) return roster;
+
+  // Real authenticated lineups from Flashscore should never be overwritten with fabricated events
+  if (isRealLineup) {
+    return roster;
+  }
 
   const isFinished = match.status === 'FINISHED' || match.live_clock === 'FT';
   const isLive = match.status === 'IN_PLAY' || match.status === 'PAUSED';
@@ -523,6 +536,7 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
   const isAr = lang === 'ar';
   const [activeTab, setActiveTab] = useState('stats'); // 'stats' | 'lineups'
   const [realDetails, setRealDetails] = useState(null);
+  const [loadingDetails, setLoadingDetails] = useState(true);
 
   // Close on Escape key
   useEffect(() => {
@@ -537,15 +551,23 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
   useEffect(() => {
     let isMounted = true;
     if (match?.id) {
+      setLoadingDetails(true);
       api(`/matches/${match.id}/details`)
         .then((data) => {
-          if (isMounted && data) {
-            setRealDetails(data);
+          if (isMounted) {
+            if (data) {
+              setRealDetails(data);
+            }
+            setLoadingDetails(false);
           }
         })
         .catch(() => {
-          // Silently fallback to mock data
+          if (isMounted) {
+            setLoadingDetails(false);
+          }
         });
+    } else {
+      setLoadingDetails(false);
     }
     return () => {
       isMounted = false;
@@ -574,59 +596,63 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
     }
   }
 
+  const hasRealLineups = Boolean(
+    realLineups?.startingHome && realLineups.startingHome.length >= 11 &&
+    realLineups?.startingAway && realLineups.startingAway.length >= 11
+  );
+
   const fallbackHome = KNOWN_ROSTERS[match.home_team] || generateFallbackRoster(match.home_team, true);
   const fallbackAway = KNOWN_ROSTERS[match.away_team] || generateFallbackRoster(match.away_team, false);
 
-  const rawHomeRoster =
-    realLineups?.startingHome && realLineups.startingHome.length >= 11
-      ? {
-          formation: realLineups.formationHome || fallbackHome.formation,
-          manager: realLineups.managerHome || fallbackHome.manager,
-          starting: realLineups.startingHome.map((p, idx) => ({
-            num: p.num ?? (idx + 1),
-            name: p.name || `Player ${idx + 1}`,
-            pos: p.pos || (idx === 0 ? 'GK' : 'MF'),
-            photo: p.photo || null,
-            rating: p.rating || null,
-            events: Array.isArray(p.events) ? p.events : []
-          })),
-          subs: (realLineups.subsHome || []).map((p, idx) => ({
-            num: p.num ?? (12 + idx),
-            name: p.name || `Sub ${idx + 1}`,
-            pos: p.pos || 'SUB',
-            photo: p.photo || null,
-            rating: p.rating || null,
-            events: Array.isArray(p.events) ? p.events : []
-          }))
-        }
-      : fallbackHome;
+  // For finished matches, NEVER render fake mock players if real lineups are unavailable
+  const rawHomeRoster = hasRealLineups
+    ? {
+        formation: realLineups.formationHome || fallbackHome.formation,
+        manager: realLineups.managerHome || fallbackHome.manager,
+        starting: realLineups.startingHome.map((p, idx) => ({
+          num: p.num ?? (idx + 1),
+          name: p.name || `Player ${idx + 1}`,
+          pos: p.pos || (idx === 0 ? 'GK' : 'MF'),
+          photo: p.photo || null,
+          rating: p.rating || null,
+          events: Array.isArray(p.events) ? p.events : []
+        })),
+        subs: (realLineups.subsHome || []).map((p, idx) => ({
+          num: p.num ?? (12 + idx),
+          name: p.name || `Sub ${idx + 1}`,
+          pos: p.pos || 'SUB',
+          photo: p.photo || null,
+          rating: p.rating || null,
+          events: Array.isArray(p.events) ? p.events : []
+        }))
+      }
+    : (finished ? null : fallbackHome);
 
-  const rawAwayRoster =
-    realLineups?.startingAway && realLineups.startingAway.length >= 11
-      ? {
-          formation: realLineups.formationAway || fallbackAway.formation,
-          manager: realLineups.managerAway || fallbackAway.manager,
-          starting: realLineups.startingAway.map((p, idx) => ({
-            num: p.num ?? (idx + 1),
-            name: p.name || `Player ${idx + 1}`,
-            pos: p.pos || (idx === 0 ? 'GK' : 'MF'),
-            photo: p.photo || null,
-            rating: p.rating || null,
-            events: Array.isArray(p.events) ? p.events : []
-          })),
-          subs: (realLineups.subsAway || []).map((p, idx) => ({
-            num: p.num ?? (12 + idx),
-            name: p.name || `Sub ${idx + 1}`,
-            pos: p.pos || 'SUB',
-            photo: p.photo || null,
-            rating: p.rating || null,
-            events: Array.isArray(p.events) ? p.events : []
-          }))
-        }
-      : fallbackAway;
+  const rawAwayRoster = hasRealLineups
+    ? {
+        formation: realLineups.formationAway || fallbackAway.formation,
+        manager: realLineups.managerAway || fallbackAway.manager,
+        starting: realLineups.startingAway.map((p, idx) => ({
+          num: p.num ?? (idx + 1),
+          name: p.name || `Player ${idx + 1}`,
+          pos: p.pos || (idx === 0 ? 'GK' : 'MF'),
+          photo: p.photo || null,
+          rating: p.rating || null,
+          events: Array.isArray(p.events) ? p.events : []
+        })),
+        subs: (realLineups.subsAway || []).map((p, idx) => ({
+          num: p.num ?? (12 + idx),
+          name: p.name || `Sub ${idx + 1}`,
+          pos: p.pos || 'SUB',
+          photo: p.photo || null,
+          rating: p.rating || null,
+          events: Array.isArray(p.events) ? p.events : []
+        }))
+      }
+    : (finished ? null : fallbackAway);
 
-  const homeRoster = enrichRosterEventsAndRatings(rawHomeRoster, true, match);
-  const awayRoster = enrichRosterEventsAndRatings(rawAwayRoster, false, match);
+  const homeRoster = rawHomeRoster ? enrichRosterEventsAndRatings(rawHomeRoster, true, match, hasRealLineups) : null;
+  const awayRoster = rawAwayRoster ? enrichRosterEventsAndRatings(rawAwayRoster, false, match, hasRealLineups) : null;
 
   // Resolve Stats (Real from Flashscore if available, else generated realistic mock)
   let parsedRealStats = null;
@@ -732,9 +758,11 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
               <span className="w-full text-xs sm:text-base font-black text-white truncate" title={match.home_team}>
                 {match.home_team}
               </span>
-              <span className="text-[11px] font-bold text-emerald-400/90 bg-emerald-950/40 border border-emerald-500/20 px-2 py-0.5 rounded-full">
-                {homeRoster.formation}
-              </span>
+              {homeRoster?.formation && (
+                <span className="text-[11px] font-bold text-emerald-400/90 bg-emerald-950/40 border border-emerald-500/20 px-2 py-0.5 rounded-full">
+                  {homeRoster.formation}
+                </span>
+              )}
             </div>
 
             {/* Center: Live Timer, Big Score & Match Status */}
@@ -794,9 +822,11 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
               <span className="w-full text-xs sm:text-base font-black text-white truncate" title={match.away_team}>
                 {match.away_team}
               </span>
-              <span className="text-[11px] font-bold text-amber-400/90 bg-amber-950/40 border border-amber-500/20 px-2 py-0.5 rounded-full">
-                {awayRoster.formation}
-              </span>
+              {awayRoster?.formation && (
+                <span className="text-[11px] font-bold text-amber-400/90 bg-amber-950/40 border border-amber-500/20 px-2 py-0.5 rounded-full">
+                  {awayRoster.formation}
+                </span>
+              )}
             </div>
           </div>
 
@@ -898,10 +928,14 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
                 <div className="flex items-center gap-2">
                   <span className="h-3 w-3 rounded-full bg-emerald-500" />
                   <span className="text-white font-extrabold">{match.home_team}</span>
-                  <span className="text-emerald-400 font-mono">({homeRoster.formation})</span>
+                  {homeRoster?.formation && (
+                    <span className="text-emerald-400 font-mono">({homeRoster.formation})</span>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-amber-400 font-mono">({awayRoster.formation})</span>
+                  {awayRoster?.formation && (
+                    <span className="text-amber-400 font-mono">({awayRoster.formation})</span>
+                  )}
                   <span className="text-white font-extrabold">{match.away_team}</span>
                   <span className="h-3 w-3 rounded-full bg-amber-500" />
                 </div>
@@ -930,133 +964,181 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
                 <div className="absolute bottom-2 sm:bottom-3 left-1/2 -translate-x-1/2 w-20 sm:w-28 h-8 sm:h-10 border-t-2 border-x-2 border-white/40 pointer-events-none" />
                 <div className="absolute bottom-16 sm:bottom-20 left-1/2 -translate-x-1/2 h-1.5 w-1.5 rounded-full bg-white/60 pointer-events-none" />
 
-                {/* ================= AWAY PLAYERS (TOP HALF) ================= */}
-                {renderTacticalFormation(awayRoster.starting, awayRoster.formation, false)}
+                {/* State-specific Content on the Pitch */}
+                {loadingDetails ? (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center z-10 bg-black/50 backdrop-blur-sm">
+                    <div className="flex flex-col items-center max-w-sm rounded-2xl border border-white/10 bg-[#0E1214]/90 p-6 shadow-2xl space-y-3">
+                      <div className="h-9 w-9 animate-spin rounded-full border-3 border-[#53FC18] border-t-transparent" />
+                      <h4 className="text-sm font-black text-white">
+                        {isAr ? 'جاري جلب التشكيلات الحقيقية...' : 'Loading match lineups...'}
+                      </h4>
+                    </div>
+                  </div>
+                ) : finished && !hasRealLineups ? (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center z-10 bg-black/45 backdrop-blur-[2px]">
+                    <div className="flex flex-col items-center max-w-sm rounded-2xl border border-white/10 bg-[#0E1214]/95 p-6 shadow-2xl space-y-3">
+                      <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/5 border border-white/10 text-3xl shadow-inner">
+                        📋
+                      </div>
+                      <div className="space-y-1">
+                        <h4 className="text-base font-black text-white">
+                          {isAr ? 'التشكيلات غير متوفرة لهذه المباراة' : 'Lineups not available for this match'}
+                        </h4>
+                        <p className="text-xs text-gray-400 leading-relaxed">
+                          {isAr
+                            ? 'لم يتم تزويد بيانات التشكيلة الرسمية لهذه المواجهة من المصدر.'
+                            : 'Official lineup data was not provided for this fixture.'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {/* AWAY PLAYERS (TOP HALF) */}
+                    {awayRoster && renderTacticalFormation(awayRoster.starting, awayRoster.formation, false)}
 
-                {/* ================= HOME PLAYERS (BOTTOM HALF) ================= */}
-                {renderTacticalFormation(homeRoster.starting, homeRoster.formation, true)}
+                    {/* HOME PLAYERS (BOTTOM HALF) */}
+                    {homeRoster && renderTacticalFormation(homeRoster.starting, homeRoster.formation, true)}
+                  </>
+                )}
               </div>
 
               {/* ================= BENCH & MANAGERS ================= */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Home Substitutes Card */}
-                <div className="rounded-2xl border border-white/10 bg-[#14181B] p-4 space-y-3">
-                  <div className="flex items-center justify-between border-b border-white/5 pb-2">
-                    <span className="text-xs font-black uppercase text-emerald-400">
-                      {isAr ? 'بدلاء' : 'Substitutes'} • {match.home_team}
-                    </span>
-                    <span className="text-[11px] text-gray-400">
-                      {isAr ? 'المدرب:' : 'Coach:'} <strong className="text-white">{homeRoster.manager}</strong>
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    {homeRoster.subs.map((p, idx) => {
-                      const subRating = getRatingStyle(p.rating);
-                      return (
-                        <div
-                          key={`${p.num || idx}-${p.name}`}
-                          className="flex items-center gap-2 rounded-xl bg-black/40 p-1.5 border border-white/5 hover:border-emerald-500/30 transition"
-                        >
-                          <PlayerAvatar
-                            photo={p.photo}
-                            name={p.name}
-                            num={p.num}
-                            isHome={true}
-                            pos={p.pos}
-                            size="sm"
-                          />
-                          <div className="flex flex-col min-w-0 flex-1">
-                            <div className="flex items-center gap-1">
-                              <span className="truncate text-gray-200 font-bold text-xs">{p.name}</span>
-                              {p.events && p.events.length > 0 && (
-                                <span className="inline-flex items-center gap-0.5 text-[9px]">
-                                  {p.events.map((ev, i) => (
-                                    <span key={i}>
-                                      {ev.type === 'goal' && '⚽'}
-                                      {ev.type === 'assist' && '👟'}
-                                      {ev.type === 'yellow_card' && '🟨'}
-                                      {ev.type === 'red_card' && '🟥'}
-                                      {ev.type === 'sub' && '🔄'}
-                                    </span>
-                                  ))}
-                                </span>
-                              )}
-                            </div>
-                            <span className="text-[10px] text-gray-500 uppercase font-mono">{p.pos || 'SUB'}</span>
-                          </div>
-
-                          {subRating && (
-                            <span
-                              className={`px-1.5 py-0.5 rounded-md font-mono font-black text-[10px] shadow-sm ${subRating.bg} ${subRating.text}`}
-                            >
-                              {subRating.label}
-                            </span>
-                          )}
-                        </div>
-                      );
-                    })}
+              {finished && !hasRealLineups && !loadingDetails ? (
+                <div className="rounded-2xl border border-white/10 bg-[#14181B] p-6 text-center">
+                  <div className="flex flex-col items-center justify-center py-3 space-y-2">
+                    <span className="text-2xl">👥</span>
+                    <h5 className="text-sm font-black text-gray-300">
+                      {isAr ? 'قائمة البدلاء غير متوفرة' : 'Substitutes not available'}
+                    </h5>
+                    <p className="text-xs text-gray-500">
+                      {isAr
+                        ? 'بيانات دكة البدلاء غير مسجلة لهذه المباراة'
+                        : 'Substitutes bench data is not recorded for this match'}
+                    </p>
                   </div>
                 </div>
-
-                {/* Away Substitutes Card */}
-                <div className="rounded-2xl border border-white/10 bg-[#14181B] p-4 space-y-3">
-                  <div className="flex items-center justify-between border-b border-white/5 pb-2">
-                    <span className="text-xs font-black uppercase text-amber-400">
-                      {isAr ? 'بدلاء' : 'Substitutes'} • {match.away_team}
-                    </span>
-                    <span className="text-[11px] text-gray-400">
-                      {isAr ? 'المدرب:' : 'Coach:'} <strong className="text-white">{awayRoster.manager}</strong>
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    {awayRoster.subs.map((p, idx) => {
-                      const subRating = getRatingStyle(p.rating);
-                      return (
-                        <div
-                          key={`${p.num || idx}-${p.name}`}
-                          className="flex items-center gap-2 rounded-xl bg-black/40 p-1.5 border border-white/5 hover:border-amber-500/30 transition"
-                        >
-                          <PlayerAvatar
-                            photo={p.photo}
-                            name={p.name}
-                            num={p.num}
-                            isHome={false}
-                            pos={p.pos}
-                            size="sm"
-                          />
-                          <div className="flex flex-col min-w-0 flex-1">
-                            <div className="flex items-center gap-1">
-                              <span className="truncate text-gray-200 font-bold text-xs">{p.name}</span>
-                              {p.events && p.events.length > 0 && (
-                                <span className="inline-flex items-center gap-0.5 text-[9px]">
-                                  {p.events.map((ev, i) => (
-                                    <span key={i}>
-                                      {ev.type === 'goal' && '⚽'}
-                                      {ev.type === 'assist' && '👟'}
-                                      {ev.type === 'yellow_card' && '🟨'}
-                                      {ev.type === 'red_card' && '🟥'}
-                                      {ev.type === 'sub' && '🔄'}
-                                    </span>
-                                  ))}
-                                </span>
-                              )}
+              ) : homeRoster && awayRoster ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Home Substitutes Card */}
+                  <div className="rounded-2xl border border-white/10 bg-[#14181B] p-4 space-y-3">
+                    <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                      <span className="text-xs font-black uppercase text-emerald-400">
+                        {isAr ? 'بدلاء' : 'Substitutes'} • {match.home_team}
+                      </span>
+                      <span className="text-[11px] text-gray-400">
+                        {isAr ? 'المدرب:' : 'Coach:'} <strong className="text-white">{homeRoster.manager}</strong>
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      {homeRoster.subs.map((p, idx) => {
+                        const subRating = getRatingStyle(p.rating);
+                        return (
+                          <div
+                            key={`${p.num || idx}-${p.name}`}
+                            className="flex items-center gap-2 rounded-xl bg-black/40 p-1.5 border border-white/5 hover:border-emerald-500/30 transition"
+                          >
+                            <PlayerAvatar
+                              photo={p.photo}
+                              name={p.name}
+                              num={p.num}
+                              isHome={true}
+                              pos={p.pos}
+                              size="sm"
+                            />
+                            <div className="flex flex-col min-w-0 flex-1">
+                              <div className="flex items-center gap-1">
+                                <span className="truncate text-gray-200 font-bold text-xs">{p.name}</span>
+                                {p.events && p.events.length > 0 && (
+                                  <span className="inline-flex items-center gap-0.5 text-[9px]">
+                                    {p.events.map((ev, i) => (
+                                      <span key={i}>
+                                        {ev.type === 'goal' && '⚽'}
+                                        {ev.type === 'assist' && '👟'}
+                                        {ev.type === 'yellow_card' && '🟨'}
+                                        {ev.type === 'red_card' && '🟥'}
+                                        {ev.type === 'sub' && '🔄'}
+                                      </span>
+                                    ))}
+                                  </span>
+                                )}
+                              </div>
+                              <span className="text-[10px] text-gray-500 uppercase font-mono">{p.pos || 'SUB'}</span>
                             </div>
-                            <span className="text-[10px] text-gray-500 uppercase font-mono">{p.pos || 'SUB'}</span>
-                          </div>
 
-                          {subRating && (
-                            <span
-                              className={`px-1.5 py-0.5 rounded-md font-mono font-black text-[10px] shadow-sm ${subRating.bg} ${subRating.text}`}
-                            >
-                              {subRating.label}
-                            </span>
-                          )}
-                        </div>
-                      );
-                    })}
+                            {subRating && (
+                              <span
+                                className={`px-1.5 py-0.5 rounded-md font-mono font-black text-[10px] shadow-sm ${subRating.bg} ${subRating.text}`}
+                              >
+                                {subRating.label}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Away Substitutes Card */}
+                  <div className="rounded-2xl border border-white/10 bg-[#14181B] p-4 space-y-3">
+                    <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                      <span className="text-xs font-black uppercase text-amber-400">
+                        {isAr ? 'بدلاء' : 'Substitutes'} • {match.away_team}
+                      </span>
+                      <span className="text-[11px] text-gray-400">
+                        {isAr ? 'المدرب:' : 'Coach:'} <strong className="text-white">{awayRoster.manager}</strong>
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      {awayRoster.subs.map((p, idx) => {
+                        const subRating = getRatingStyle(p.rating);
+                        return (
+                          <div
+                            key={`${p.num || idx}-${p.name}`}
+                            className="flex items-center gap-2 rounded-xl bg-black/40 p-1.5 border border-white/5 hover:border-amber-500/30 transition"
+                          >
+                            <PlayerAvatar
+                              photo={p.photo}
+                              name={p.name}
+                              num={p.num}
+                              isHome={false}
+                              pos={p.pos}
+                              size="sm"
+                            />
+                            <div className="flex flex-col min-w-0 flex-1">
+                              <div className="flex items-center gap-1">
+                                <span className="truncate text-gray-200 font-bold text-xs">{p.name}</span>
+                                {p.events && p.events.length > 0 && (
+                                  <span className="inline-flex items-center gap-0.5 text-[9px]">
+                                    {p.events.map((ev, i) => (
+                                      <span key={i}>
+                                        {ev.type === 'goal' && '⚽'}
+                                        {ev.type === 'assist' && '👟'}
+                                        {ev.type === 'yellow_card' && '🟨'}
+                                        {ev.type === 'red_card' && '🟥'}
+                                        {ev.type === 'sub' && '🔄'}
+                                      </span>
+                                    ))}
+                                  </span>
+                                )}
+                              </div>
+                              <span className="text-[10px] text-gray-500 uppercase font-mono">{p.pos || 'SUB'}</span>
+                            </div>
+
+                            {subRating && (
+                              <span
+                                className={`px-1.5 py-0.5 rounded-md font-mono font-black text-[10px] shadow-sm ${subRating.bg} ${subRating.text}`}
+                              >
+                                {subRating.label}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
-              </div>
+              ) : null}
             </div>
           )}
         </div>
@@ -1185,7 +1267,13 @@ function renderTacticalFormation(players = [], formationStr = '4-3-3', isHome = 
  */
 function PlayerAvatar({ photo, name, num, rating, isHome, pos, size = 'md' }) {
   const [imgFailed, setImgFailed] = useState(false);
-  const hasPhoto = Boolean(photo && !imgFailed);
+
+  useEffect(() => {
+    setImgFailed(false);
+  }, [photo]);
+
+  const proxiedPhoto = getProxiedImageUrl(photo);
+  const hasPhoto = Boolean(proxiedPhoto && !imgFailed);
   const isGK = pos === 'GK' || num === 1;
 
   const sizeClasses = size === 'sm' ? 'h-6 w-6' : 'h-8 w-8 sm:h-10 sm:w-10';
@@ -1206,10 +1294,11 @@ function PlayerAvatar({ photo, name, num, rating, isHome, pos, size = 'md' }) {
       >
         {hasPhoto ? (
           <img
-            src={photo}
+            src={proxiedPhoto}
             alt={name || 'Player'}
             className="h-full w-full object-cover object-top"
             loading="lazy"
+            referrerPolicy="no-referrer"
             onError={() => setImgFailed(true)}
           />
         ) : (

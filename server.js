@@ -9,7 +9,7 @@ const jwt = require('jsonwebtoken');
 const cron = require('node-cron');
 const { Pool } = require('pg');
 const oddsProvider = require('./oddsProvider');
-const { initFlashscoreSync, syncFlashscoreSchedule, smartLivePolling, fetchMatchLiveDetails } = require('./sync-flashscore');
+const { initFlashscoreSync, syncFlashscoreSchedule, smartLivePolling, fetchMatchLiveDetails, bigIntToFlashscoreId } = require('./sync-flashscore');
 const { initTunisiaSync } = require('./sync-tunisia');
 
 const {
@@ -977,23 +977,30 @@ app.get(
       return res.status(404).json({ error: 'Match not found.' });
     }
     const row = rows[0];
-    if ((!row.match_lineups || row.status === 'IN_PLAY' || row.status === 'PAUSED') && row.flashscore_id && fetchMatchLiveDetails) {
+    const rawFlashId = row.flashscore_id || (row.external_id && bigIntToFlashscoreId ? bigIntToFlashscoreId(row.external_id) : null);
+    console.log(`[API /details] Request for match ${matchId} (${row.home_team} vs ${row.away_team}) - rawFlashId: ${rawFlashId}, hasLineupsInDB: ${Boolean(row.match_lineups)}`);
+
+    if ((!row.match_lineups || row.status === 'IN_PLAY' || row.status === 'PAUSED') && rawFlashId && fetchMatchLiveDetails) {
       try {
-        const liveDetails = await fetchMatchLiveDetails(row.flashscore_id);
+        console.log(`[API /details] Fetching live details from Flashscore for ${rawFlashId}...`);
+        const liveDetails = await fetchMatchLiveDetails(rawFlashId);
         if (liveDetails) {
           const hasLineups = Boolean(liveDetails.lineups);
           const hasStats = Array.isArray(liveDetails.stats) && liveDetails.stats.length > 0;
           const hasIncidents = Array.isArray(liveDetails.incidents) && liveDetails.incidents.length > 0;
+          console.log(`[API /details] Live details for ${rawFlashId} retrieved: lineups=${hasLineups}, stats=${hasStats}, incidents=${hasIncidents}`);
 
           if (hasLineups || hasStats || hasIncidents) {
             await pool.query(
               `UPDATE matches
-               SET match_stats = COALESCE($1::jsonb, match_stats),
-                   match_incidents = COALESCE($2::jsonb, match_incidents),
-                   match_lineups = COALESCE($3::jsonb, match_lineups),
+               SET flashscore_id = COALESCE(flashscore_id, $1),
+                   match_stats = COALESCE($2::jsonb, match_stats),
+                   match_incidents = COALESCE($3::jsonb, match_incidents),
+                   match_lineups = COALESCE($4::jsonb, match_lineups),
                    updated_at = NOW()
-               WHERE id = $4`,
+               WHERE id = $5`,
               [
+                rawFlashId,
                 hasStats ? JSON.stringify(liveDetails.stats) : null,
                 hasIncidents ? JSON.stringify(liveDetails.incidents) : null,
                 hasLineups ? JSON.stringify(liveDetails.lineups) : null,
@@ -1003,13 +1010,74 @@ app.get(
             if (hasLineups) row.match_lineups = liveDetails.lineups;
             if (hasStats) row.match_stats = liveDetails.stats;
             if (hasIncidents) row.match_incidents = liveDetails.incidents;
+            console.log(`[API /details] Successfully saved details to DB for match ${matchId}`);
           }
         }
       } catch (liveErr) {
-        // Non-blocking: continue with cached data
+        console.error(`[API /details] Error fetching live details for match ${matchId} (${rawFlashId}):`, liveErr.message);
       }
     }
     res.json(row);
+  })
+);
+
+// ---------------------------------------------------------------------------
+// 4b. Image Proxy (to bypass browser CORS/Hotlinking restrictions on Flashscore CDNs)
+// ---------------------------------------------------------------------------
+app.get(
+  '/api/image-proxy',
+  asyncHandler(async (req, res) => {
+    const rawUrl = req.query.url;
+    if (!rawUrl || typeof rawUrl !== 'string') {
+      return res.status(400).send('Missing url parameter');
+    }
+
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(rawUrl);
+    } catch {
+      return res.status(400).send('Invalid url');
+    }
+
+    // Security check: restrict proxying strictly to trusted public football image domains
+    const allowedHosts = [
+      'static.flashscore.com',
+      'flashscore.com',
+      'res.cloudinary.com',
+      'upload.wikimedia.org'
+    ];
+    const isAllowed = allowedHosts.some(
+      (h) => parsedUrl.hostname === h || parsedUrl.hostname.endsWith('.' + h)
+    );
+    if (!isAllowed) {
+      return res.status(403).send('Forbidden host');
+    }
+
+    try {
+      const upstreamRes = await fetch(parsedUrl.href, {
+        headers: {
+          'User-Agent': 'Dalvik/2.1.0 (Linux; U; Android 14; SM-S928B Build/UP1A.231005.007)',
+          'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+        },
+        signal: AbortSignal.timeout(8000)
+      });
+
+      if (!upstreamRes.ok) {
+        return res.status(upstreamRes.status).send('Upstream image error');
+      }
+
+      const contentType = upstreamRes.headers.get('content-type') || 'image/png';
+      res.set({
+        'Content-Type': contentType,
+        'Cache-Control': 'public, max-age=86400, s-maxage=604800, stale-while-revalidate=86400',
+        'Access-Control-Allow-Origin': '*'
+      });
+
+      const buffer = Buffer.from(await upstreamRes.arrayBuffer());
+      return res.send(buffer);
+    } catch (err) {
+      return res.status(502).send('Error fetching upstream image');
+    }
   })
 );
 

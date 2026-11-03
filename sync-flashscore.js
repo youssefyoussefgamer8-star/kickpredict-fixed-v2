@@ -560,6 +560,8 @@ function parseFlashscoreLineups(rawText) {
       const pPhoto = photoKey ? `https://static.flashscore.com/res/image/data/${photoKey.trim()}` : null;
       const pRating = fields.LPR ? fields.LPR.trim() : null;
       const pId = fields.LP ? fields.LP.trim() : null;
+      const slot = fields.LL ? parseInt(fields.LL, 10) : 99;
+      const isGK = fields.LG === '3' || fields.LL === '1' || pNum === 1;
 
       const pEvents = [];
       if (fields.LIN) {
@@ -574,11 +576,11 @@ function parseFlashscoreLineups(rawText) {
         if (currentTeam === 1) managerHome = pName;
         else managerAway = pName;
       } else if (currentSection === 'subs') {
-        const subObj = { id: pId, name: pName, num: pNum, photo: pPhoto, rating: pRating, pos: 'SUB', events: pEvents };
+        const subObj = { id: pId, name: pName, num: pNum, photo: pPhoto, rating: pRating, slot, pos: 'SUB', events: pEvents };
         if (currentTeam === 1) subsHome.push(subObj);
         else subsAway.push(subObj);
       } else {
-        const playerObj = { id: pId, name: pName, num: pNum, photo: pPhoto, rating: pRating, pos: 'PL', events: pEvents };
+        const playerObj = { id: pId, name: pName, num: pNum, photo: pPhoto, rating: pRating, slot, pos: isGK ? 'GK' : 'PL', events: pEvents };
         if (!hasExplicitSections) {
           if (startingHome.length < 11) startingHome.push(playerObj);
           else startingAway.push(playerObj);
@@ -590,11 +592,19 @@ function parseFlashscoreLineups(rawText) {
     }
   }
 
+  // Sort starting 11 by tactical slot (LL) so Goalkeeper (Slot 1) is index 0 and formation rows follow tactical order
+  if (startingHome.length >= 11 && startingHome.some((p) => p.slot !== 99)) {
+    startingHome.sort((a, b) => a.slot - b.slot);
+  }
+  if (startingAway.length >= 11 && startingAway.some((p) => p.slot !== 99)) {
+    startingAway.sort((a, b) => a.slot - b.slot);
+  }
+
   const assignPos = (list, form) => {
     const rows = form.split('-').map((n) => parseInt(n, 10)).filter((n) => !isNaN(n));
     if (rows.length === 0) rows.push(4, 3, 3);
     for (let i = 0; i < list.length; i++) {
-      if (i === 0) {
+      if (i === 0 || list[i].pos === 'GK') {
         list[i].pos = 'GK';
       } else {
         let cumulative = 1;
@@ -615,6 +625,8 @@ function parseFlashscoreLineups(rawText) {
 
   assignPos(startingHome, formationHome);
   assignPos(startingAway, formationAway);
+
+  console.log(`[Flashscore Parser] Parsed lineups: Home ${formationHome} (${startingHome.length} starting, ${subsHome.length} subs), Away ${formationAway} (${startingAway.length} starting, ${subsAway.length} subs)`);
 
   return {
     formationHome,
@@ -639,9 +651,20 @@ async function fetchMatchLiveDetails(matchRawId, { fetcher = fetch } = {}) {
     fetchFlashscoreFeed(`df_li_1_${matchRawId}`, { fetcher })
   ]);
 
+  console.log(`[Flashscore Details] Raw match feeds result for ${matchRawId}: st=${stText.status}, sui=${suiText.status}, li=${liText.status}`);
+  if (liText.status === 'rejected') {
+    console.warn(`[Flashscore Details] df_li_1_${matchRawId} feed rejected:`, liText.reason?.message);
+  }
+
   const stats = stText.status === 'fulfilled' ? parseFlashscoreStats(stText.value) : [];
   const incidents = suiText.status === 'fulfilled' ? parseFlashscoreIncidents(suiText.value) : [];
   let lineups = liText.status === 'fulfilled' ? parseFlashscoreLineups(liText.value) : null;
+
+  if (lineups) {
+    console.log(`[Flashscore Details] Lineups successfully parsed for ${matchRawId}: ${lineups.startingHome.length} home, ${lineups.startingAway.length} away players.`);
+  } else {
+    console.warn(`[Flashscore Details] No lineups parsed for match ${matchRawId}.`);
+  }
 
   // Cross-reference and attach incidents (goals, assists, cards, substitutions) to player profiles
   if (lineups && incidents.length > 0) {
