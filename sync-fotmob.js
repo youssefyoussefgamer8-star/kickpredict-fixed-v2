@@ -6,6 +6,9 @@
  * maps FotMob lineup payloads into KickPredict's tactical roster contract.
  */
 
+const { teamRatings, matchLambdas, buildMatchMarketsPoints } = require('./pricingEngine');
+const { MASTER_CRESTS } = require('./team-crests-master');
+
 const FOTMOB_API_BASE = 'https://www.fotmob.com/api';
 const FOTMOB_IMAGE_BASE = 'https://images.fotmob.com/image_resources/playerimages';
 
@@ -36,6 +39,11 @@ const TEAM_ALIASES = {
   bayernmunchen: 'bayernmunchen',
   dortmund: 'borussiadortmund',
   bvb: 'borussiadortmund',
+  borussiadortmund: 'borussiadortmund',
+  betis: 'realbetis',
+  realbetis: 'realbetis',
+  psv: 'psveindhoven',
+  psveindhoven: 'psveindhoven',
   inter: 'internazionale',
   intermilan: 'internazionale',
   milan: 'acmilan',
@@ -92,10 +100,10 @@ function cleanTeamName(name) {
 
   if (TEAM_ALIASES[pre]) return TEAM_ALIASES[pre];
 
-  // Strip prefixes / suffixes like fc, cf, afc, ac, sc, as if not sole identifier
+  // Strip prefixes / suffixes like fc, cf, afc, ac, sc, as, fk, kv if not sole identifier
   let cleaned = pre
     .replace(/^(fc|cf|afc|ac|sc|as|vfb|rb|fk)/, '')
-    .replace(/(fc|cf|afc|sc)$/, '');
+    .replace(/(fc|cf|afc|sc|fk|kv)$/, '');
 
   if (cleaned.length < 3) cleaned = pre;
 
@@ -114,6 +122,205 @@ function teamsMatch(nameA, nameB) {
     if (cleanA.includes(cleanB) || cleanB.includes(cleanA)) return true;
   }
   return false;
+}
+
+/**
+ * Dictionary mapping Latin team names to canonical Arabic team names for Tunisian league.
+ */
+const TUNISIA_TEAMS_AR = {
+  'stade tunisien': 'الملعب التونسي',
+  'club africain': 'النادي الإفريقي',
+  'esperance tunis': 'الترجي الرياضي',
+  'esperance de tunis': 'الترجي الرياضي',
+  'esperance': 'الترجي الرياضي',
+  'etoile sahel': 'النجم الساحلي',
+  'etoile du sahel': 'النجم الساحلي',
+  'cs sfaxien': 'النادي الصفاقسي',
+  'sfaxien': 'النادي الصفاقسي',
+  'us monastir': 'الاتحاد المنستيري',
+  'monastir': 'الاتحاد المنستيري',
+  'es zarzis': 'الترجي الجرجيسي',
+  'zarzis': 'الترجي الجرجيسي',
+  'olympique beja': 'الأولمبي الباجي',
+  'beja': 'الأولمبي الباجي',
+  'ca bizertin': 'النادي البنزرتي',
+  'bizertin': 'النادي البنزرتي',
+  'us ben guerdane': 'اتحاد بن قردان',
+  'ben guerdane': 'اتحاد بن قردان',
+  'as soliman': 'مستقبل سليمان',
+  'soliman': 'مستقبل سليمان',
+  'egs gafsa': 'قوافل قفصة',
+  'gafsa': 'قوافل قفصة',
+  'js omrane': 'شبيبة العمران',
+  'omrane': 'شبيبة العمران',
+  'es metlaoui': 'نجم المتلوي',
+  'metlaoui': 'نجم المتلوي',
+  'us tataouine': 'اتحاد تطاوين',
+  'tataouine': 'اتحاد تطاوين',
+  'as gabes': 'مستقبل قابس',
+  'gabes': 'مستقبل قابس',
+  'cs hammam-lif': 'نادي حمام الأنف',
+  'hammam-lif': 'نادي حمام الأنف',
+  'ps sakiet eddaier': 'تقدم ساقية الدائر',
+  'sakiet eddaier': 'تقدم ساقية الدائر'
+};
+
+/**
+ * Formats a raw team name into Arabic if Tunisian, otherwise returns cleaned name.
+ */
+function formatTunisianTeam(rawName) {
+  if (!rawName) return 'فريق تونسي';
+  const clean = rawName.trim();
+  if (/[\u0600-\u06FF]/.test(clean)) return clean;
+  const lower = clean.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  for (const [latin, arabic] of Object.entries(TUNISIA_TEAMS_AR)) {
+    if (lower === latin || lower.includes(latin)) {
+      return arabic;
+    }
+  }
+  return clean;
+}
+
+/**
+ * Maps FotMob tournament/league payload to KickPredict competition code
+ * Supported: CL, PL, PD, BL1, SA, FL1, TUN
+ */
+function identifyFotmobCompetition(league) {
+  if (!league) return null;
+  const pId = league.primaryId || league.parentLeagueId || league.id;
+  const idStr = String(pId);
+  const name = (league.name || '').trim();
+  const lowerName = name.toLowerCase();
+  const ccode = (league.ccode || '').toUpperCase();
+
+  // Exclude youth, women, and reserve competitions
+  if (
+    lowerName.includes('women') ||
+    lowerName.includes('femm') ||
+    lowerName.includes('u19') ||
+    lowerName.includes('u21') ||
+    lowerName.includes('youth') ||
+    lowerName.includes('reserve')
+  ) {
+    return null;
+  }
+
+  // 1. Champions League (CL)
+  if (
+    idStr === '42' ||
+    ((name === 'Champions League' || name === 'UEFA Champions League') && ccode === 'INT')
+  ) {
+    return 'CL';
+  }
+
+  // 2. Premier League (PL)
+  if (
+    idStr === '47' ||
+    (name === 'Premier League' && ccode === 'ENG')
+  ) {
+    return 'PL';
+  }
+
+  // 3. La Liga (PD)
+  if (
+    idStr === '87' ||
+    ((name === 'LaLiga' || name === 'La Liga' || name === 'Primera División') && ccode === 'ESP')
+  ) {
+    return 'PD';
+  }
+
+  // 4. Bundesliga (BL1)
+  if (
+    idStr === '54' ||
+    (name === 'Bundesliga' && ccode === 'GER')
+  ) {
+    return 'BL1';
+  }
+
+  // 5. Serie A (SA)
+  if (
+    idStr === '55' ||
+    (name === 'Serie A' && ccode === 'ITA')
+  ) {
+    return 'SA';
+  }
+
+  // 6. Ligue 1 (FL1)
+  if (
+    idStr === '53' ||
+    (name === 'Ligue 1' && ccode === 'FRA')
+  ) {
+    return 'FL1';
+  }
+
+  // 7. Tunisian Ligue Professionnelle 1 (TUN)
+  if (
+    idStr === '326' ||
+    idStr === '544' ||
+    idStr === '943985' ||
+    ccode === 'TUN' ||
+    (lowerName.includes('tunis') && (lowerName.includes('ligue') || lowerName.includes('professionnelle') || lowerName.includes('premiere') || lowerName.includes('ligue 1') || lowerName.includes('ligue i'))) ||
+    (ccode === 'TUN' && (name === 'Ligue I' || name === 'Ligue 1' || name === 'Ligue Professionnelle 1'))
+  ) {
+    return 'TUN';
+  }
+
+  return null;
+}
+
+/**
+ * Resolves team crest URL using MASTER_CRESTS dictionary first, falling back to FotMob CDN
+ */
+function getFotmobCrest(teamId, teamName) {
+  if (teamName && MASTER_CRESTS && MASTER_CRESTS[teamName]) {
+    return MASTER_CRESTS[teamName];
+  }
+  if (teamId) {
+    return `https://images.fotmob.com/image_resources/logo/teamlogo/${teamId}.png`;
+  }
+  return null;
+}
+
+/**
+ * Maps FotMob match status object to KickPredict status contract
+ */
+function mapFotmobMatchStatus(m) {
+  const status = m?.status;
+  const isFinished = Boolean(
+    status?.finished === true ||
+    status?.reason?.short === 'FT' ||
+    status?.reason?.shortKey === 'fulltime_short' ||
+    status?.reason?.longKey === 'finished' ||
+    m?.statusId === 6 ||
+    status?.reason?.short === 'AET' ||
+    status?.reason?.short === 'Pen' ||
+    status?.reason?.short === 'AP'
+  );
+  if (isFinished) return 'FINISHED';
+
+  const isCancelled = Boolean(
+    status?.cancelled === true ||
+    status?.reason?.short === 'PP' ||
+    status?.reason?.short === 'Can'
+  );
+  if (isCancelled) return 'CANCELLED';
+
+  const isPaused = Boolean(
+    status?.reason?.short === 'HT' ||
+    status?.reason?.shortKey === 'halftime_short' ||
+    status?.reason?.longKey === 'pause_match'
+  );
+  if (isPaused) return 'PAUSED';
+
+  const isLive = Boolean(
+    status?.started === true ||
+    status?.ongoing === true ||
+    m?.statusId === 2 ||
+    m?.statusId === 3
+  );
+  if (isLive) return 'IN_PLAY';
+
+  return 'TIMED';
 }
 
 /**
@@ -772,6 +979,355 @@ async function smartLivePollingFotmob(
   }
 }
 
+/**
+ * Daily fixtures synchronizer using FotMob API:
+ * 1. Iterates from startDay (default -1, yesterday) through endDay (default +7, 7 days ahead).
+ * 2. Fetches https://www.fotmob.com/api/data/matches?date=YYYYMMDD (fallback /matches?date=...).
+ * 3. Filters matches for supported competitions: CL, PL, PD, BL1, SA, FL1, TUN.
+ * 4. Calculates Poisson probability points and builds markets.
+ * 5. Executes UPSERT into PostgreSQL matches table, linking fotmob_id and updating kickoff dates, scores, status, and team names.
+ * 6. Triggers settlement for newly finished matches if settleFinishedMatches is provided.
+ */
+async function syncFotmobFixtures(
+  pool,
+  { fetcher = fetch, startDay = -1, endDay = 7, settleFinishedMatches } = {}
+) {
+  const actualStart = startDay !== undefined ? startDay : -1;
+  const actualEnd = endDay !== undefined ? endDay : 7;
+  const totalDays = actualEnd - actualStart + 1;
+  console.log(`[FotMob Fixtures Sync] Fetching ${totalDays}-day fixtures schedule (${actualStart} to +${actualEnd}) for all competitions...`);
+
+  try {
+    const toDateStr = (d) => {
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}${month}${day}`;
+    };
+
+    const allDiscoveredMatches = [];
+    const now = Date.now();
+
+    for (let dayOffset = actualStart; dayOffset <= actualEnd; dayOffset++) {
+      const targetDate = new Date(now + dayOffset * 24 * 60 * 60 * 1000);
+      const dStr = toDateStr(targetDate);
+
+      const urls = [
+        `${FOTMOB_API_BASE}/data/matches?date=${dStr}`,
+        `${FOTMOB_API_BASE}/matches?date=${dStr}`
+      ];
+
+      let dayMatches = [];
+      for (const url of urls) {
+        try {
+          const res = await fetcher(url, {
+            headers: FOTMOB_HEADERS,
+            signal: AbortSignal.timeout(8000)
+          });
+          if (res.ok) {
+            const data = await safeParseJsonResponse(res);
+            const leagues = Array.isArray(data?.leagues) ? data.leagues : [];
+            for (const league of leagues) {
+              const compCode = identifyFotmobCompetition(league);
+              if (!compCode) continue;
+
+              const matches = Array.isArray(league.matches) ? league.matches : [];
+              for (const m of matches) {
+                if (m && m.id) {
+                  dayMatches.push({
+                    raw: m,
+                    league,
+                    compCode,
+                    dateStr: dStr
+                  });
+                }
+              }
+            }
+            if (dayMatches.length > 0) break;
+          }
+        } catch (err) {
+          console.warn(`[FotMob Fixtures Sync] Error fetching date ${dStr} from ${url}:`, err.message);
+        }
+      }
+
+      console.log(`[FotMob Fixtures Sync] Date ${dStr} (offset ${dayOffset}): found ${dayMatches.length} approved fixtures.`);
+      allDiscoveredMatches.push(...dayMatches);
+    }
+
+    console.log(`[FotMob Fixtures Sync] Total fixtures gathered across all days: ${allDiscoveredMatches.length}`);
+
+    // Build Poisson expected ratings from finished matches per competition
+    const finishedByComp = {};
+    if (pool) {
+      try {
+        const { rows: dbFinished } = await pool.query(
+          `SELECT home_score, away_score, external_id, competition_code
+           FROM matches
+           WHERE status = 'FINISHED'
+             AND home_score IS NOT NULL
+             AND away_score IS NOT NULL`
+        );
+        for (const row of dbFinished) {
+          const c = row.competition_code || 'PL';
+          if (!finishedByComp[c]) finishedByComp[c] = [];
+          finishedByComp[c].push({
+            homeId: Number(row.external_id) || 1,
+            awayId: (Number(row.external_id) || 1) + 1,
+            homeGoals: row.home_score,
+            awayGoals: row.away_score
+          });
+        }
+      } catch (err) {
+        // fallback
+      }
+    }
+
+    const modelsByComp = {};
+    for (const [c, finished] of Object.entries(finishedByComp)) {
+      modelsByComp[c] = teamRatings(finished);
+    }
+
+    let storedCount = 0;
+    const newlyFinishedMatches = [];
+
+    for (const item of allDiscoveredMatches) {
+      const m = item.raw;
+      const compCode = item.compCode;
+      const fotmobMatchId = Number(m.id);
+      if (!Number.isSafeInteger(fotmobMatchId) || fotmobMatchId <= 0) continue;
+
+      const isTunisia = compCode === 'TUN';
+      const rawHome = m.home?.name || m.home?.shortName || '';
+      const rawAway = m.away?.name || m.away?.shortName || '';
+      if (!rawHome || !rawAway) continue;
+
+      const homeTeam = isTunisia ? formatTunisianTeam(rawHome) : rawHome.trim();
+      const awayTeam = isTunisia ? formatTunisianTeam(rawAway) : rawAway.trim();
+      const homeCrest = getFotmobCrest(m.home?.id, homeTeam);
+      const awayCrest = getFotmobCrest(m.away?.id, awayTeam);
+
+      let kickoffIso;
+      if (m.status?.utcTime) {
+        kickoffIso = new Date(m.status.utcTime).toISOString();
+      } else if (m.timeTS) {
+        kickoffIso = new Date(m.timeTS).toISOString();
+      } else {
+        kickoffIso = new Date().toISOString();
+      }
+
+      const status = mapFotmobMatchStatus(m);
+      const matchday = parseInt(m.tournamentStage, 10) || 1;
+
+      let homeScore = null;
+      let awayScore = null;
+      if (status === 'FINISHED' || status === 'IN_PLAY' || status === 'PAUSED') {
+        if (m.home?.score != null && m.away?.score != null) {
+          homeScore = Number(m.home.score);
+          awayScore = Number(m.away.score);
+        } else if (typeof m.status?.scoreStr === 'string' && m.status.scoreStr.includes('-')) {
+          const parts = m.status.scoreStr.split('-').map(s => parseInt(s.trim(), 10));
+          if (!isNaN(parts[0]) && !isNaN(parts[1])) {
+            homeScore = parts[0];
+            awayScore = parts[1];
+          }
+        }
+      }
+
+      const compModel = modelsByComp[compCode] || teamRatings([]);
+      const homeIdNum = Number(m.home?.id) || fotmobMatchId;
+      const awayIdNum = Number(m.away?.id) || (fotmobMatchId + 1);
+      const { lambdaHome, lambdaAway } = matchLambdas(homeIdNum, awayIdNum, compModel);
+      const markets = buildMatchMarketsPoints(lambdaHome, lambdaAway);
+
+      if (!pool) {
+        storedCount++;
+        continue;
+      }
+
+      // Check if match already exists in PostgreSQL
+      let existingMatch = null;
+      let dbRows = [];
+      try {
+        const queryRes = await pool.query(
+          `SELECT id, external_id, fotmob_id, flashscore_id, competition_code, home_team, away_team, utc_date, status, home_score, away_score, points_calculated
+           FROM matches
+           WHERE fotmob_id = $1
+              OR external_id = $1
+              OR (
+                competition_code = $2
+                AND utc_date >= $3::timestamptz - INTERVAL '36 hours'
+                AND utc_date <= $3::timestamptz + INTERVAL '36 hours'
+              )
+           LIMIT 100`,
+          [fotmobMatchId, compCode, kickoffIso]
+        );
+        dbRows = queryRes.rows || [];
+
+        existingMatch = dbRows.find(r =>
+          String(r.fotmob_id) === String(fotmobMatchId) ||
+          String(r.external_id) === String(fotmobMatchId) ||
+          ((teamsMatch(r.home_team, homeTeam) && teamsMatch(r.away_team, awayTeam)) ||
+           (teamsMatch(r.home_team, awayTeam) && teamsMatch(r.away_team, homeTeam)))
+        );
+      } catch (findErr) {
+        console.warn(`[FotMob Fixtures Sync] Match lookup error for ${homeTeam} vs ${awayTeam}:`, findErr.message);
+      }
+
+      if (existingMatch) {
+        if (status === 'FINISHED' && existingMatch.status !== 'FINISHED') {
+          newlyFinishedMatches.push({ id: existingMatch.id, homeScore, awayScore });
+        }
+
+        await pool.query(
+          `UPDATE matches
+           SET fotmob_id = $1,
+               competition_code = $2,
+               home_team = $3,
+               home_crest = COALESCE($4, home_crest),
+               away_team = $5,
+               away_crest = COALESCE($6, away_crest),
+               utc_date = CASE WHEN points_calculated THEN utc_date ELSE $7::timestamptz END,
+               status = CASE
+                 WHEN points_calculated AND utc_date < NOW() - INTERVAL '48 hours' THEN status
+                 WHEN points_calculated AND ($8 != 'FINISHED' OR $9::int IS NULL OR $10::int IS NULL) THEN status
+                 ELSE $8
+               END,
+               home_score = CASE
+                 WHEN points_calculated AND utc_date < NOW() - INTERVAL '48 hours' THEN home_score
+                 WHEN points_calculated AND ($8 != 'FINISHED' OR $9::int IS NULL OR $10::int IS NULL) THEN home_score
+                 ELSE COALESCE($9::int, home_score)
+               END,
+               away_score = CASE
+                 WHEN points_calculated AND utc_date < NOW() - INTERVAL '48 hours' THEN away_score
+                 WHEN points_calculated AND ($8 != 'FINISHED' OR $9::int IS NULL OR $10::int IS NULL) THEN away_score
+                 ELSE COALESCE($10::int, away_score)
+               END,
+               round_key = COALESCE(round_key, 'REGULAR_SEASON'),
+               round_label = COALESCE(round_label, 'Matchday'),
+               updated_at = NOW()
+           WHERE id = $11`,
+          [
+            fotmobMatchId,
+            compCode,
+            homeTeam,
+            homeCrest,
+            awayTeam,
+            awayCrest,
+            kickoffIso,
+            status,
+            homeScore,
+            awayScore,
+            existingMatch.id
+          ]
+        );
+
+        // Clean up any unlinked placeholder duplicate without predictions
+        const duplicateUnlinked = dbRows.filter(r =>
+          r.id !== existingMatch.id &&
+          !r.fotmob_id &&
+          ((teamsMatch(r.home_team, homeTeam) && teamsMatch(r.away_team, awayTeam)) ||
+           (teamsMatch(r.home_team, awayTeam) && teamsMatch(r.away_team, homeTeam)))
+        );
+        for (const dup of duplicateUnlinked) {
+          try {
+            await pool.query(
+              `DELETE FROM matches WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM predictions WHERE match_id = $1)`,
+              [dup.id]
+            );
+          } catch (_) {}
+        }
+
+        storedCount++;
+      } else {
+        // Remove any unlinked placeholder duplicate without predictions before inserting
+        const duplicateUnlinked = dbRows.filter(r =>
+          !r.fotmob_id &&
+          ((teamsMatch(r.home_team, homeTeam) && teamsMatch(r.away_team, awayTeam)) ||
+           (teamsMatch(r.home_team, awayTeam) && teamsMatch(r.away_team, homeTeam)))
+        );
+        for (const dup of duplicateUnlinked) {
+          try {
+            await pool.query(
+              `DELETE FROM matches WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM predictions WHERE match_id = $1)`,
+              [dup.id]
+            );
+          } catch (_) {}
+        }
+
+        await pool.query(
+          `INSERT INTO matches (
+             external_id, fotmob_id, competition_code, stage, matchday, round_key, round_label,
+             home_team, home_crest, away_team, away_crest, utc_date, status,
+             home_score, away_score, home_lambda, away_lambda, markets_points, updated_at
+           ) VALUES (
+             $1, $2, $3, 'REGULAR_SEASON', $4, 'REGULAR_SEASON', 'Matchday',
+             $5, $6, $7, $8, $9::timestamptz, $10,
+             $11, $12, $13, $14, $15::jsonb, NOW()
+           )
+           ON CONFLICT (external_id) DO UPDATE SET
+             fotmob_id = EXCLUDED.fotmob_id,
+             competition_code = EXCLUDED.competition_code,
+             home_team = EXCLUDED.home_team,
+             home_crest = COALESCE(EXCLUDED.home_crest, matches.home_crest),
+             away_team = EXCLUDED.away_team,
+             away_crest = COALESCE(EXCLUDED.away_crest, matches.away_crest),
+             utc_date = CASE WHEN matches.points_calculated THEN matches.utc_date ELSE EXCLUDED.utc_date END,
+             status = CASE
+               WHEN matches.points_calculated AND matches.utc_date < NOW() - INTERVAL '48 hours' THEN matches.status
+               WHEN matches.points_calculated AND (EXCLUDED.status != 'FINISHED' OR EXCLUDED.home_score IS NULL OR EXCLUDED.away_score IS NULL) THEN matches.status
+               ELSE EXCLUDED.status
+             END,
+             home_score = CASE
+               WHEN matches.points_calculated AND matches.utc_date < NOW() - INTERVAL '48 hours' THEN matches.home_score
+               WHEN matches.points_calculated AND (EXCLUDED.status != 'FINISHED' OR EXCLUDED.home_score IS NULL OR EXCLUDED.away_score IS NULL) THEN matches.home_score
+               ELSE COALESCE(EXCLUDED.home_score, matches.home_score)
+             END,
+             away_score = CASE
+               WHEN matches.points_calculated AND matches.utc_date < NOW() - INTERVAL '48 hours' THEN matches.away_score
+               WHEN matches.points_calculated AND (EXCLUDED.status != 'FINISHED' OR EXCLUDED.home_score IS NULL OR EXCLUDED.away_score IS NULL) THEN matches.away_score
+               ELSE COALESCE(EXCLUDED.away_score, matches.away_score)
+             END,
+             updated_at = NOW()`,
+          [
+            fotmobMatchId,
+            fotmobMatchId,
+            compCode,
+            matchday,
+            homeTeam,
+            homeCrest,
+            awayTeam,
+            awayCrest,
+            kickoffIso,
+            status,
+            homeScore,
+            awayScore,
+            lambdaHome,
+            lambdaAway,
+            JSON.stringify(markets)
+          ]
+        );
+        storedCount++;
+      }
+    }
+
+    console.log(`[FotMob Fixtures Sync] Successfully stored/updated ${storedCount} fixtures in PostgreSQL.`);
+
+    if (newlyFinishedMatches.length > 0 && typeof settleFinishedMatches === 'function') {
+      try {
+        console.log(`[FotMob Fixtures Sync] Triggering settlement for ${newlyFinishedMatches.length} newly finished matches...`);
+        await settleFinishedMatches();
+      } catch (settleErr) {
+        console.error('[FotMob Fixtures Sync] Settlement execution error:', settleErr.message);
+      }
+    }
+
+    return allDiscoveredMatches;
+  } catch (err) {
+    console.error('[FotMob Fixtures Sync] Schedule sync error:', err.message);
+    return [];
+  }
+}
+
 module.exports = {
   FOTMOB_API_BASE,
   FOTMOB_IMAGE_BASE,
@@ -784,5 +1340,10 @@ module.exports = {
   findFotmobMatchId,
   fetchFotmobLineup,
   parseFotmobStats,
-  smartLivePollingFotmob
+  smartLivePollingFotmob,
+  identifyFotmobCompetition,
+  formatTunisianTeam,
+  getFotmobCrest,
+  mapFotmobMatchStatus,
+  syncFotmobFixtures
 };

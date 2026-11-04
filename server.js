@@ -9,9 +9,11 @@ const jwt = require('jsonwebtoken');
 const cron = require('node-cron');
 const { Pool } = require('pg');
 const oddsProvider = require('./oddsProvider');
-const { initFlashscoreSync, syncFlashscoreSchedule, smartLivePolling, fetchMatchLiveDetails, bigIntToFlashscoreId } = require('./sync-flashscore');
-const { fetchFotmobLineup, smartLivePollingFotmob } = require('./sync-fotmob');
-const { initTunisiaSync } = require('./sync-tunisia');
+const {
+  fetchFotmobLineup,
+  smartLivePollingFotmob,
+  syncFotmobFixtures
+} = require('./sync-fotmob');
 
 const {
   EXTRA_MARKETS,
@@ -1045,7 +1047,7 @@ app.get(
     }
     const row = rows[0];
     const matchId = row.id;
-    const rawFlashId = row.flashscore_id || (row.external_id && bigIntToFlashscoreId ? bigIntToFlashscoreId(row.external_id) : null);
+    const rawFlashId = row.flashscore_id || null;
     const hasLineupsInDB = hasUsableLineups(row.match_lineups);
     const hasStatsInDB = Boolean(row.match_stats && (Array.isArray(row.match_stats) ? row.match_stats.length > 0 : Object.keys(row.match_stats).length > 0));
     console.log(`[API /details] Match resolved: id=${matchId}, external_id=${row.external_id}, flashscore_id=${rawFlashId}, status=${row.status}, hasLineupsInDB=${hasLineupsInDB}, hasStatsInDB=${hasStatsInDB}`);
@@ -2037,12 +2039,25 @@ const server = app.listen(PORT, async () => {
   console.log(`KickPredict backend listening on port ${PORT}`);
   console.log(`Competitions: ${COMPETITIONS.join(', ')}`);
   await ensureAutoCorrectionSchema();
-  initFlashscoreSync({
-    pool,
-    cron,
-    settleFinishedMatches,
-    reconcileScoreCorrections
+  // 1. On-Boot Fetch of 9-day FotMob schedule (-1 yesterday to +7 days ahead)
+  console.log('[FotMob] Running On-Boot 9-day fixtures schedule synchronization...');
+  syncFotmobFixtures(pool, { startDay: -1, endDay: 7, settleFinishedMatches }).catch((err) => {
+    console.error('[FotMob Fixtures Sync] On-boot cycle error:', err.message);
   });
+
+  // 2. Midnight Cron Job at 00:00 Africa/Tunis time
+  cron.schedule(
+    '0 0 * * *',
+    () => {
+      console.log('[FotMob] Midnight Cron Job triggered: refreshing 9-day fixtures schedule (-1 to +7 days) for all leagues...');
+      syncFotmobFixtures(pool, { startDay: -1, endDay: 7, settleFinishedMatches })
+        .then(() => (typeof settleFinishedMatches === 'function' ? settleFinishedMatches() : null))
+        .catch((err) => {
+          console.error('[FotMob Fixtures Sync] Midnight Cron error:', err.message);
+        });
+    },
+    { timezone: 'Africa/Tunis' }
+  );
 
   // Trigger initial FotMob live polling cycle on boot
   smartLivePollingFotmob(pool, { settleFinishedMatches, reconcileScoreCorrections }).catch((err) => {

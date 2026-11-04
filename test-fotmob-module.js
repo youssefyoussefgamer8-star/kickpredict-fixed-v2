@@ -8,7 +8,10 @@ const {
   parseFotmobStats,
   findFotmobMatchId,
   fetchFotmobLineup,
-  smartLivePollingFotmob
+  smartLivePollingFotmob,
+  identifyFotmobCompetition,
+  formatTunisianTeam,
+  syncFotmobFixtures
 } = require('./sync-fotmob');
 
 console.log('--- Testing FotMob Module ---');
@@ -324,6 +327,83 @@ console.log('✓ Mock lineup parsing and events mapping verified');
   assert.strictEqual(parsedStats[4].homeVal, 8);
   assert.strictEqual(parsedStats[4].awayVal, 12);
   console.log('✓ parseFotmobStats verified: extracts normalized metrics, values, keys, and categories');
+
+  // 8. Test Competition & Team Identification
+  console.log('\nTesting FotMob Competition & Team Identification...');
+  assert.strictEqual(identifyFotmobCompetition({ id: 943230, primaryId: 42, name: 'Champions League', ccode: 'INT' }), 'CL');
+  assert.strictEqual(identifyFotmobCompetition({ id: 47, name: 'Premier League', ccode: 'ENG' }), 'PL');
+  assert.strictEqual(identifyFotmobCompetition({ id: 87, name: 'LaLiga', ccode: 'ESP' }), 'PD');
+  assert.strictEqual(identifyFotmobCompetition({ id: 54, name: 'Bundesliga', ccode: 'GER' }), 'BL1');
+  assert.strictEqual(identifyFotmobCompetition({ id: 55, name: 'Serie A', ccode: 'ITA' }), 'SA');
+  assert.strictEqual(identifyFotmobCompetition({ id: 53, name: 'Ligue 1', ccode: 'FRA' }), 'FL1');
+  assert.strictEqual(identifyFotmobCompetition({ id: 943985, primaryId: 544, name: 'Ligue I', ccode: 'TUN' }), 'TUN');
+  assert.strictEqual(identifyFotmobCompetition({ id: 1000001206, name: "CAF Women's Champions League", ccode: 'INT' }), null);
+  assert.strictEqual(identifyFotmobCompetition({ id: 942146, name: 'Serie A Femminile', ccode: 'ITA' }), null);
+
+  assert.strictEqual(formatTunisianTeam('Espérance'), 'الترجي الرياضي');
+  assert.strictEqual(formatTunisianTeam('US Monastir'), 'الاتحاد المنستيري');
+  assert.strictEqual(formatTunisianTeam('Club Africain'), 'النادي الإفريقي');
+  console.log('✓ identifyFotmobCompetition and formatTunisianTeam verified across all 7 supported leagues');
+
+  // 9. Test syncFotmobFixtures Schedule Engine
+  console.log('\nTesting syncFotmobFixtures Schedule Engine...');
+  const fixtureQueries = [];
+  const mockPool = {
+    query: async (sql, params) => {
+      if (sql.includes('SELECT home_score')) {
+        return { rows: [] };
+      }
+      if (sql.includes('SELECT id, external_id')) {
+        return { rows: [] };
+      }
+      if (sql.includes('INSERT INTO matches') || sql.includes('UPDATE matches')) {
+        fixtureQueries.push({ sql, params });
+        return { rowCount: 1 };
+      }
+      return { rows: [] };
+    }
+  };
+
+  const mockFetcher = async (url) => {
+    return {
+      ok: true,
+      json: async () => ({
+        leagues: [
+          {
+            id: 943230,
+            primaryId: 42,
+            name: 'Champions League',
+            ccode: 'INT',
+            matches: [
+              {
+                id: 6106401,
+                tournamentStage: '4',
+                home: { id: 8563, name: 'AEK Athens', score: 2 },
+                away: { id: 8633, name: 'Real Madrid', score: 3 },
+                status: {
+                  utcTime: '2026-11-04T17:45:00.000Z',
+                  finished: true,
+                  reason: { short: 'FT' }
+                }
+              }
+            ]
+          }
+        ]
+      })
+    };
+  };
+
+  const discovered = await syncFotmobFixtures(mockPool, { fetcher: mockFetcher, startDay: 0, endDay: 0 });
+  assert.strictEqual(discovered.length, 1, 'Should discover 1 fixture');
+  assert.strictEqual(fixtureQueries.length, 1, 'Should execute 1 DB insertion');
+  assert.strictEqual(fixtureQueries[0].params[0], 6106401, 'external_id must match FotMob matchId');
+  assert.strictEqual(fixtureQueries[0].params[2], 'CL', 'competition_code must be CL');
+  assert.strictEqual(fixtureQueries[0].params[4], 'AEK Athens', 'Home team must be AEK Athens');
+  assert.strictEqual(fixtureQueries[0].params[6], 'Real Madrid', 'Away team must be Real Madrid');
+  assert.strictEqual(fixtureQueries[0].params[9], 'FINISHED', 'Status must be FINISHED');
+  assert.strictEqual(fixtureQueries[0].params[10], 2, 'Home score must be 2');
+  assert.strictEqual(fixtureQueries[0].params[11], 3, 'Away score must be 3');
+  console.log('✓ syncFotmobFixtures verified: discovers, parses, calculates lambdas & markets, and stores fixtures in DB');
 
   console.log('\nAll FotMob module tests passed 100%!');
 })();

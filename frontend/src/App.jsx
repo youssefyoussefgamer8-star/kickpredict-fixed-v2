@@ -193,10 +193,22 @@ export default function App() {
   const boostsLeft = Math.max(0, (data?.maxBoosts ?? 0) - (data?.boostsUsed ?? 0));
 
   const allMatches = useMemo(() => data?.matches || [], [data?.matches]);
-  const availableDates = useMemo(
-    () => Array.from(new Set(allMatches.map((m) => localDateKey(m.utc_date)).filter(Boolean))).sort(),
-    [allMatches]
-  );
+  const availableDates = useMemo(() => {
+    const rawDates = Array.from(new Set(allMatches.map((m) => localDateKey(m.utc_date)).filter(Boolean))).sort();
+    if (rawDates.length === 0) return [];
+    const todayKey = localDateKey(new Date());
+    const minStr = rawDates[0] < todayKey ? rawDates[0] : todayKey;
+    const maxStr = rawDates[rawDates.length - 1];
+    const minD = new Date(minStr + 'T00:00:00');
+    const maxD = new Date(maxStr + 'T00:00:00');
+    const filled = [];
+    const cur = new Date(minD);
+    while (cur <= maxD && filled.length < 14) {
+      filled.push(localDateKey(cur));
+      cur.setDate(cur.getDate() + 1);
+    }
+    return filled;
+  }, [allMatches]);
 
   const placeholderDates = PLACEHOLDER_DATES;
 
