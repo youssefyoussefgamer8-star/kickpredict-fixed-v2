@@ -8,7 +8,7 @@ const {
   fetchMatchLiveDetails,
   bigIntToFlashscoreId
 } = require('./sync-flashscore');
-const { fetchSofascoreLineups } = require('./sync-sofascore');
+const { fetchFotmobLineup } = require('./sync-fotmob');
 
 (async () => {
   console.log('================================================================');
@@ -76,20 +76,14 @@ const { fetchSofascoreLineups } = require('./sync-sofascore');
     let liveDetails = null;
 
     if (needsLineups) {
-      // 1. Sofascore
+      // Sole and primary lineups provider: FotMob
       try {
-        const sofaLineups = await fetchSofascoreLineups(testMatch.home_team, testMatch.away_team, testMatch.utc_date);
-        if (hasUsableLineups(sofaLineups)) {
-          bestLineups = sofaLineups;
+        const fotmobLineup = await fetchFotmobLineup(testMatch.home_team, testMatch.away_team, testMatch.utc_date);
+        if (hasUsableLineups(fotmobLineup)) {
+          bestLineups = fotmobLineup;
         }
-      } catch (e) {}
-
-      // 2. Flashscore fallback
-      if (!hasUsableLineups(bestLineups) && rawFlashId) {
-        liveDetails = await fetchMatchLiveDetails(rawFlashId);
-        if (hasUsableLineups(liveDetails?.lineups)) {
-          bestLineups = liveDetails.lineups;
-        }
+      } catch (e) {
+        console.warn('FotMob error in test:', e.message);
       }
     }
 

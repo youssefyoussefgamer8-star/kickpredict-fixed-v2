@@ -7,7 +7,8 @@ function getProxiedImageUrl(url) {
     url.includes('static.flashscore.com') ||
     url.includes('flashscore.com') ||
     url.includes('sofascore.com') ||
-    url.includes('sofascore.app')
+    url.includes('sofascore.app') ||
+    url.includes('fotmob.com')
   ) {
     return `${API_BASE}/image-proxy?url=${encodeURIComponent(url)}`;
   }

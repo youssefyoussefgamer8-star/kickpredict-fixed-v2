@@ -10,7 +10,7 @@ const cron = require('node-cron');
 const { Pool } = require('pg');
 const oddsProvider = require('./oddsProvider');
 const { initFlashscoreSync, syncFlashscoreSchedule, smartLivePolling, fetchMatchLiveDetails, bigIntToFlashscoreId } = require('./sync-flashscore');
-const { fetchSofascoreLineups } = require('./sync-sofascore');
+const { fetchFotmobLineup } = require('./sync-fotmob');
 const { initTunisiaSync } = require('./sync-tunisia');
 
 const {
@@ -1063,29 +1063,25 @@ app.get(
     let liveDetails = null;
 
     if (needsLineups || needsLiveMatchUpdate) {
-      // 1. If lineups are needed, try Sofascore as a primary source
-      if (needsLineups && typeof fetchSofascoreLineups === 'function') {
+      // 1. FotMob is the sole and primary source for authentic match lineups
+      if (needsLineups && typeof fetchFotmobLineup === 'function') {
         try {
-          console.log(`[API /details] Attempting Sofascore lineups for ${row.home_team} vs ${row.away_team} (matchId: ${matchId}, date: ${row.utc_date})...`);
-          const sofascoreLineups = await fetchSofascoreLineups(row.home_team, row.away_team, row.utc_date);
-          if (hasUsableLineups(sofascoreLineups)) {
-            bestLineups = sofascoreLineups;
-            console.log(`[API /details] Sofascore lineups successfully retrieved for ${row.home_team} vs ${row.away_team} (${bestLineups.startingHome.length} home starters)`);
+          console.log(`[API /details] Attempting FotMob lineups for ${row.home_team} vs ${row.away_team} (matchId: ${matchId}, date: ${row.utc_date})...`);
+          const fotmobLineup = await fetchFotmobLineup(row.home_team, row.away_team, row.utc_date);
+          if (hasUsableLineups(fotmobLineup)) {
+            bestLineups = fotmobLineup;
+            console.log(`[API /details] FotMob lineups successfully retrieved for ${row.home_team} vs ${row.away_team} (${bestLineups.startingHome.length} home starters)`);
           }
-        } catch (sofaErr) {
-          console.warn(`[API /details] Sofascore lineups lookup error for match ${matchId}:`, sofaErr.message);
+        } catch (fotmobErr) {
+          console.warn(`[API /details] FotMob lineups lookup error for match ${matchId}:`, fotmobErr.message);
         }
       }
 
-      // 2. If Flashscore is available and we either need live match stats/scores OR we still need lineups:
-      if ((needsLiveMatchUpdate || !hasUsableLineups(bestLineups)) && rawFlashId && typeof fetchMatchLiveDetails === 'function') {
+      // 2. Fetch live match stats/scores if live or kickoff near/past
+      if (needsLiveMatchUpdate && rawFlashId && typeof fetchMatchLiveDetails === 'function') {
         try {
           console.log(`[API /details] Fetching live details from Flashscore for ${rawFlashId} (matchId: ${matchId})...`);
           liveDetails = await fetchMatchLiveDetails(rawFlashId);
-          if (!hasUsableLineups(bestLineups) && hasUsableLineups(liveDetails?.lineups)) {
-            bestLineups = liveDetails.lineups;
-            console.log(`[API /details] Flashscore lineups successfully retrieved for match ${matchId} (${bestLineups.startingHome.length} home starters)`);
-          }
         } catch (flashErr) {
           console.warn(`[API /details] Flashscore live details fetch error for match ${matchId} (${rawFlashId}):`, flashErr.message);
         }
@@ -1234,8 +1230,11 @@ app.get(
       return res.status(400).send('Invalid url');
     }
 
-    // Security check: restrict proxying strictly to trusted public football image domains (Flashscore + Sofascore)
+    // Security check: restrict proxying strictly to trusted public football image domains (FotMob + Flashscore + Sofascore)
     const allowedHosts = [
+      'images.fotmob.com',
+      'www.fotmob.com',
+      'fotmob.com',
       'static.flashscore.com',
       'flashscore.com',
       'img.sofascore.com',
@@ -1253,8 +1252,15 @@ app.get(
     }
 
     try {
+      const isFotmob = parsedUrl.hostname.includes('fotmob');
       const isSofascore = parsedUrl.hostname.includes('sofascore');
-      const upstreamHeaders = isSofascore
+      const upstreamHeaders = isFotmob
+        ? {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+            'Referer': 'https://www.fotmob.com/'
+          }
+        : isSofascore
         ? {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
             'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
