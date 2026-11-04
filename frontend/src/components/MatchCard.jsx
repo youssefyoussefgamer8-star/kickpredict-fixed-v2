@@ -10,7 +10,7 @@ export default function MatchCard({ match, user, lang, t, onSaved, onError }) {
   const markets = match.markets_points;
   const settled = match.settled_outcomes;
   const finished = match.status === 'FINISHED' || match.live_clock === 'FT';
-  const isLive =
+  const isLive = !finished && (
     match.status === 'IN_PLAY' ||
     match.status === 'PAUSED' ||
     match.status === 'LIVE' ||
@@ -18,7 +18,8 @@ export default function MatchCard({ match, user, lang, t, onSaved, onError }) {
     match.status === '2H' ||
     match.status === 'HT' ||
     Boolean(match.live_clock) ||
-    Number.isFinite(match.live_seconds);
+    Number.isFinite(match.live_seconds)
+  );
   const readOnly = !user || match.is_locked;
 
   const [outcome, setOutcome] = useState(pred?.predicted_outcome ?? null);
@@ -245,9 +246,18 @@ export default function MatchCard({ match, user, lang, t, onSaved, onError }) {
   ];
 
   const statusBadge = finished ? (
-    <span className="rounded bg-gray-800 px-2 py-0.5 font-bold text-gray-300">{t.finished}</span>
+    <span className="inline-flex items-center rounded bg-gray-800 border border-gray-700 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-gray-300">
+      FT
+    </span>
+  ) : isLive ? (
+    <span className="inline-flex items-center gap-1 rounded bg-red-950/80 border border-red-500/30 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-red-400 animate-pulse">
+      <span className="h-1.5 w-1.5 rounded-full bg-red-500"></span>
+      {t.live || 'LIVE'}
+    </span>
   ) : match.is_locked ? (
-    <span className="rounded bg-red-950 px-2 py-0.5 font-bold text-red-400">{t.live}</span>
+    <span className="inline-flex items-center rounded bg-gray-800/80 border border-white/5 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-gray-400">
+      {t.locked || 'Locked'}
+    </span>
   ) : null;
 
   // Standings slice helper (shows top 6 + rows around home/away teams, or full table)
@@ -352,11 +362,17 @@ export default function MatchCard({ match, user, lang, t, onSaved, onError }) {
             )}
 
             <div className="flex items-center justify-center min-w-[62px] h-10 rounded-xl bg-[#0f1214] border border-white/10 px-2.5 font-mono shadow-inner">
-              {(isLive || finished || match.is_locked || match.status === 'LIVE' || match.status === 'IN_PLAY' || match.status === 'PAUSED' || match.status === 'FINISHED') && (match.home_score != null || isLive || finished) ? (
+              {match.home_score != null && match.away_score != null ? (
                 <div className="flex items-center gap-1.5 text-lg font-black text-white">
-                  <span>{match.home_score ?? 0}</span>
+                  <span>{match.home_score}</span>
                   <span className="text-[#53FC18] text-xs font-bold">:</span>
-                  <span>{match.away_score ?? 0}</span>
+                  <span>{match.away_score}</span>
+                </div>
+              ) : (isLive || finished) ? (
+                <div className="flex items-center gap-1.5 text-lg font-black text-white">
+                  <span>{match.home_score != null ? match.home_score : 0}</span>
+                  <span className="text-[#53FC18] text-xs font-bold">:</span>
+                  <span>{match.away_score != null ? match.away_score : 0}</span>
                 </div>
               ) : scoreFilled ? (
                 <div className="flex items-center gap-1 text-base font-black text-[#53FC18]">
@@ -823,7 +839,7 @@ export default function MatchCard({ match, user, lang, t, onSaved, onError }) {
                   <div className="mt-4 space-y-2 rounded-xl border border-[#242C30] bg-[#14191B] p-3 text-xs">
                     <div className="flex items-center justify-between">
                       <span className="text-gray-400">
-                        {t.result}: <strong className="text-white">{match.home_score} - {match.away_score}</strong>
+                        {t.result}: <strong className="text-white">{match.home_score != null ? match.home_score : 0} - {match.away_score != null ? match.away_score : 0}</strong>
                       </span>
                       {pred.points_awarded != null && (
                         <span className="rounded-lg bg-[#F0C72F]/20 px-3 py-1 text-sm font-black text-[#F0C72F]">

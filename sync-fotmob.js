@@ -23,6 +23,7 @@ const TEAM_ALIASES = {
   mancity: 'manchestercity',
   manunited: 'manchesterunited',
   manutd: 'manchesterunited',
+  manchesterutd: 'manchesterunited',
   wolves: 'wolverhampton',
   spurs: 'tottenhamhotspur',
   tottenham: 'tottenhamhotspur',
@@ -55,7 +56,19 @@ const TEAM_ALIASES = {
   frankfurt: 'eintrachtfrankfurt',
   eintrachtfrankfurt: 'eintrachtfrankfurt',
   leipzig: 'rbleipzig',
-  rbleipzig: 'rbleipzig'
+  rbleipzig: 'rbleipzig',
+  roma: 'asroma',
+  asroma: 'asroma',
+  bilbao: 'athleticclub',
+  athbilbao: 'athleticclub',
+  athleticbilbao: 'athleticclub',
+  athleticclub: 'athleticclub',
+  depacoruna: 'deportivolacoruna',
+  deportivo: 'deportivolacoruna',
+  deportivolacoruna: 'deportivolacoruna',
+  deportivoacoruna: 'deportivolacoruna',
+  realsociedad: 'realsociedad',
+  sociedad: 'realsociedad'
 };
 
 /**
@@ -63,22 +76,30 @@ const TEAM_ALIASES = {
  */
 function cleanTeamName(name) {
   if (!name || typeof name !== 'string') return '';
-  const normalized = name
+  const pre = name
     .toLowerCase()
+    .replace(/[øØ]/g, 'o')
+    .replace(/[æÆ]/g, 'ae')
+    .replace(/[œŒ]/g, 'oe')
+    .replace(/[ß]/g, 'ss')
+    .replace(/[ðÐ]/g, 'd')
+    .replace(/[þÞ]/g, 'th')
+    .replace(/\butd\b/g, 'united')
+    .replace(/[\.]/g, '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9]/g, '');
 
-  if (TEAM_ALIASES[normalized]) return TEAM_ALIASES[normalized];
+  if (TEAM_ALIASES[pre]) return TEAM_ALIASES[pre];
 
   // Strip prefixes / suffixes like fc, cf, afc, ac, sc, as if not sole identifier
-  let cleaned = normalized
+  let cleaned = pre
     .replace(/^(fc|cf|afc|ac|sc|as|vfb|rb|fk)/, '')
     .replace(/(fc|cf|afc|sc)$/, '');
 
-  if (cleaned.length < 3) cleaned = normalized;
+  if (cleaned.length < 3) cleaned = pre;
 
-  return TEAM_ALIASES[cleaned] || TEAM_ALIASES[normalized] || cleaned;
+  return TEAM_ALIASES[cleaned] || TEAM_ALIASES[pre] || cleaned;
 }
 
 /**
@@ -247,14 +268,43 @@ function parseFotmobLineup(data) {
   };
 
   const headerTeams = Array.isArray(data.header?.teams) ? data.header.teams : [];
-  const homeScore = headerTeams[0]?.score != null ? Number(headerTeams[0].score) : null;
-  const awayScore = headerTeams[1]?.score != null ? Number(headerTeams[1].score) : null;
+  let homeScore = headerTeams[0]?.score != null ? Number(headerTeams[0].score) : null;
+  let awayScore = headerTeams[1]?.score != null ? Number(headerTeams[1].score) : null;
 
   const headerStatus = data.header?.status;
-  const isFinished = Boolean(headerStatus?.finished || headerStatus?.reason?.short === 'FT');
-  const isPaused = Boolean(headerStatus?.reason?.short === 'HT' || headerStatus?.reason?.shortKey === 'halftime_short');
-  const isLive = Boolean(headerStatus?.started && !headerStatus?.finished);
-  const liveClock = headerStatus?.liveTime?.short || headerStatus?.reason?.short || null;
+  if ((homeScore == null || awayScore == null) && typeof headerStatus?.scoreStr === 'string' && headerStatus.scoreStr.includes('-')) {
+    const parts = headerStatus.scoreStr.split('-').map((s) => parseInt(s.trim(), 10));
+    if (!isNaN(parts[0]) && !isNaN(parts[1])) {
+      homeScore = parts[0];
+      awayScore = parts[1];
+    }
+  }
+
+  const isFinished = Boolean(
+    headerStatus?.finished === true ||
+    headerStatus?.reason?.short === 'FT' ||
+    headerStatus?.reason?.shortKey === 'fulltime_short' ||
+    headerStatus?.reason?.longKey === 'finished' ||
+    data.header?.statusId === 6 ||
+    headerStatus?.reason?.short === 'AET' ||
+    headerStatus?.reason?.short === 'Pen' ||
+    headerStatus?.reason?.short === 'AP'
+  );
+  const isPaused = Boolean(
+    headerStatus?.reason?.short === 'HT' ||
+    headerStatus?.reason?.shortKey === 'halftime_short' ||
+    headerStatus?.reason?.longKey === 'pause_match'
+  );
+  const isCancelled = Boolean(
+    headerStatus?.cancelled === true ||
+    headerStatus?.reason?.short === 'PP' ||
+    headerStatus?.reason?.short === 'Can'
+  );
+  const isLive = !isFinished && !isCancelled && Boolean(
+    headerStatus?.started === true ||
+    headerStatus?.ongoing === true
+  );
+  const liveClock = headerStatus?.liveTime?.short || headerStatus?.reason?.short || (isFinished ? 'FT' : null);
 
   return {
     source: 'fotmob',
@@ -273,7 +323,7 @@ function parseFotmobLineup(data) {
       home: homeScore,
       away: awayScore
     },
-    status: isFinished ? 'FINISHED' : (isPaused ? 'PAUSED' : (isLive ? 'IN_PLAY' : null)),
+    status: isFinished ? 'FINISHED' : (isCancelled ? 'CANCELLED' : (isPaused ? 'PAUSED' : (isLive ? 'IN_PLAY' : null))),
     liveClock
   };
 }
@@ -429,16 +479,15 @@ async function smartLivePollingFotmob(
       `SELECT id, external_id, fotmob_id, flashscore_id, competition_code, home_team, away_team, utc_date, status, home_score, away_score,
               home_ht, away_ht, points_calculated
        FROM matches
-       WHERE status IN ('IN_PLAY', 'PAUSED', 'LIVE', '1H', '2H', 'HT')
-          OR (
-            status IN ('TIMED', 'SCHEDULED')
+       WHERE (
+            status NOT IN ('FINISHED', 'CANCELLED', 'POSTPONED')
             AND utc_date <= NOW() + INTERVAL '30 minutes'
-            AND utc_date >= NOW() - INTERVAL '300 minutes'
+            AND utc_date >= NOW() - INTERVAL '14 days'
           )
           OR (
             status = 'FINISHED'
             AND (home_score IS NULL OR away_score IS NULL OR points_calculated IS NOT TRUE)
-            AND utc_date >= NOW() - INTERVAL '24 hours'
+            AND utc_date >= NOW() - INTERVAL '7 days'
           )
        ORDER BY utc_date ASC`
     );
@@ -523,16 +572,50 @@ async function smartLivePollingFotmob(
         if (!fm) continue;
 
         // Extract scores
-        const homeScore = fm.home?.score != null ? Number(fm.home.score) : null;
-        const awayScore = fm.away?.score != null ? Number(fm.away.score) : null;
+        let homeScore = fm.home?.score != null ? Number(fm.home.score) : null;
+        let awayScore = fm.away?.score != null ? Number(fm.away.score) : null;
+        if ((homeScore == null || awayScore == null) && typeof fm.status?.scoreStr === 'string' && fm.status.scoreStr.includes('-')) {
+          const parts = fm.status.scoreStr.split('-').map((s) => parseInt(s.trim(), 10));
+          if (!isNaN(parts[0]) && !isNaN(parts[1])) {
+            homeScore = parts[0];
+            awayScore = parts[1];
+          }
+        }
 
-        // Map status
+        // Map status explicitly
         let newStatus = dbMatch.status;
-        if (fm.status?.finished === true || fm.status?.reason?.short === 'FT') {
+        const isFin = Boolean(
+          fm.status?.finished === true ||
+          fm.status?.reason?.short === 'FT' ||
+          fm.status?.reason?.shortKey === 'fulltime_short' ||
+          fm.status?.reason?.longKey === 'finished' ||
+          fm.statusId === 6 ||
+          fm.status?.reason?.short === 'AET' ||
+          fm.status?.reason?.short === 'Pen' ||
+          fm.status?.reason?.short === 'AP'
+        );
+        const isPaused = Boolean(
+          fm.status?.reason?.short === 'HT' ||
+          fm.status?.reason?.shortKey === 'halftime_short' ||
+          fm.status?.reason?.longKey === 'pause_match'
+        );
+        const isCancelled = Boolean(
+          fm.status?.cancelled === true ||
+          fm.status?.reason?.short === 'PP' ||
+          fm.status?.reason?.short === 'Can'
+        );
+        const isOngoing = Boolean(
+          fm.status?.ongoing === true ||
+          (fm.status?.started === true && !fm.status?.finished)
+        );
+
+        if (isFin) {
           newStatus = 'FINISHED';
-        } else if (fm.status?.reason?.short === 'HT' || fm.status?.reason?.shortKey === 'halftime_short') {
+        } else if (isCancelled) {
+          newStatus = 'CANCELLED';
+        } else if (isPaused) {
           newStatus = 'PAUSED';
-        } else if (fm.status?.ongoing === true || (fm.status?.started === true && !fm.status?.finished)) {
+        } else if (isOngoing) {
           newStatus = 'IN_PLAY';
         }
 

@@ -12,14 +12,21 @@ const {
 
 console.log('--- Testing FotMob Module ---');
 
-// 1. Team Name Matching
+// 1. Team Name Matching & Zombie Match Handling
 assert.ok(teamsMatch('FC Barcelona', 'Barcelona'));
 assert.ok(teamsMatch('Aston Villa', 'Aston Villa FC'));
 assert.ok(teamsMatch('Paris Saint-Germain', 'PSG'));
 assert.ok(teamsMatch('Atl. Madrid', 'Atlético Madrid'));
 assert.ok(teamsMatch('Bayern Munich', 'Bayern München'));
+assert.ok(teamsMatch('Manchester Utd', 'Manchester United'), 'Manchester Utd alias match');
+assert.ok(teamsMatch('AS Roma', 'Roma'), 'AS Roma alias match');
+assert.ok(teamsMatch('Bodo/Glimt', 'Bodø/Glimt'), 'Bodø/Glimt special diacritic match');
+assert.ok(teamsMatch('Galatasaray', 'Galatasaray'));
+assert.ok(teamsMatch('Stuttgart', 'VfB Stuttgart'), 'Stuttgart alias match');
+assert.ok(teamsMatch('Dep. A Coruna', 'Deportivo A Coruña'), 'Deportivo A Coruña alias match');
+assert.ok(teamsMatch('Ath Bilbao', 'Athletic Club'), 'Athletic Club alias match');
 assert.strictEqual(teamsMatch('Real Madrid', 'Barcelona'), false);
-console.log('✓ Fuzzy team matching verified for FotMob');
+console.log('✓ Fuzzy team matching verified for FotMob (including Bodø/Glimt, Manchester Utd, and A Coruña)');
 
 // 2. Position Mapping
 assert.strictEqual(mapFotmobPosition(0, 11, 0), 'GK');

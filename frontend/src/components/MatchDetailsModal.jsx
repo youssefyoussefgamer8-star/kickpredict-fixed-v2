@@ -153,10 +153,10 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
   if (!match) return null;
 
   const finished = match.status === 'FINISHED' || match.live_clock === 'FT' || realDetails?.status === 'FINISHED';
-  const isLive = match.status === 'IN_PLAY' || match.status === 'PAUSED' || match.status === 'LIVE' || realDetails?.status === 'IN_PLAY' || realDetails?.status === 'PAUSED' || Boolean(match.live_clock);
+  const isLive = !finished && (match.status === 'IN_PLAY' || match.status === 'PAUSED' || match.status === 'LIVE' || realDetails?.status === 'IN_PLAY' || realDetails?.status === 'PAUSED' || Boolean(match.live_clock));
   const homeScore = realDetails?.home_score ?? match.home_score;
   const awayScore = realDetails?.away_score ?? match.away_score;
-  const hasScore = (homeScore != null && awayScore != null) || isLive || finished;
+  const hasScore = homeScore != null && awayScore != null;
 
   // Resolve Rosters (Ultra-defensive resolution across all possible paths)
   const candidate =
@@ -439,9 +439,15 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
               <div className="flex items-center justify-center min-w-[90px] sm:min-w-[120px] h-12 sm:h-14 rounded-2xl bg-[#090C0E] border border-white/10 px-4 font-mono shadow-inner">
                 {hasScore ? (
                   <div className="flex items-center gap-2 sm:gap-3 text-2xl sm:text-3xl font-black tracking-tight text-white">
-                    <span>{homeScore ?? 0}</span>
+                    <span>{homeScore}</span>
                     <span className="text-[#53FC18] text-lg font-bold">:</span>
-                    <span>{awayScore ?? 0}</span>
+                    <span>{awayScore}</span>
+                  </div>
+                ) : (isLive || finished) ? (
+                  <div className="flex items-center gap-2 sm:gap-3 text-2xl sm:text-3xl font-black tracking-tight text-white">
+                    <span>{homeScore != null ? homeScore : 0}</span>
+                    <span className="text-[#53FC18] text-lg font-bold">:</span>
+                    <span>{awayScore != null ? awayScore : 0}</span>
                   </div>
                 ) : (
                   <span className="text-sm sm:text-base font-black tracking-widest text-gray-400">VS</span>
