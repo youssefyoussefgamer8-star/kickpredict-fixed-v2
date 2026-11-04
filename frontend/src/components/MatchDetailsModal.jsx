@@ -607,50 +607,102 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
                   </div>
                 </div>
               ) : (
-                /* 3. Real Lineups Available: Formations Bar, Pitch, and Bench */
-                <>
-                  {/* Formations Header Bar */}
-                  <div className="flex items-center justify-between bg-[#14181B] border border-white/5 rounded-2xl p-3 text-xs sm:text-sm font-bold">
-                    <div className="flex items-center gap-2">
-                      <span className="h-3 w-3 rounded-full bg-emerald-500" />
-                      <span className="text-white font-extrabold">{match.home_team}</span>
-                      <span className="text-emerald-400 font-mono">({homeRoster.formation})</span>
+                /* 3. Real Lineups Available: Two Separate Pitches (Home & Away) */
+                <div className="space-y-8">
+                  {/* ================= TEAM 1: HOME PITCH ================= */}
+                  <div className="space-y-3">
+                    {/* Home Header */}
+                    <div className="flex items-center justify-between bg-gradient-to-r from-emerald-950/70 via-[#14181B] to-[#14181B] border border-emerald-500/30 rounded-2xl p-3 sm:p-4 shadow-xl">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="flex h-11 w-11 sm:h-13 sm:w-13 shrink-0 items-center justify-center rounded-2xl bg-black/50 p-2 border border-emerald-500/30 shadow-inner">
+                          {match.home_crest ? (
+                            <img src={match.home_crest} alt="" className="h-full w-full object-contain drop-shadow" />
+                          ) : (
+                            <span className="text-xs font-black text-emerald-400">
+                              {String(match.home_team || 'H').slice(0, 2).toUpperCase()}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex flex-col min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4 className="text-base sm:text-lg font-black text-white truncate">{match.home_team}</h4>
+                            <span className="px-2.5 py-0.5 rounded-lg bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 font-mono text-xs sm:text-sm font-black shadow-sm">
+                              {homeRoster.formation}
+                            </span>
+                          </div>
+                          {homeRoster.manager && (
+                            <span className="text-xs text-gray-400 truncate mt-0.5">
+                              {isAr ? 'المدرب:' : 'Coach:'} <strong className="text-gray-200">{homeRoster.manager}</strong>
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/40 text-xs font-bold text-emerald-400 shrink-0">
+                        <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                        <span>{isAr ? 'الفريق المضيف' : 'Home Team'}</span>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-amber-400 font-mono">({awayRoster.formation})</span>
-                      <span className="text-white font-extrabold">{match.away_team}</span>
-                      <span className="h-3 w-3 rounded-full bg-amber-500" />
-                    </div>
+
+                    {/* Dedicated Home Pitch */}
+                    <SoccerPitch
+                      starting={homeRoster.starting}
+                      formation={homeRoster.formation}
+                      isHome={true}
+                      isAr={isAr}
+                    />
                   </div>
 
-                  {/* CSS Tactical Soccer Pitch */}
-                  <div className="relative mx-auto w-full max-w-[560px] aspect-[2/3] min-h-[580px] rounded-3xl border-2 border-white/30 bg-[#165B33] shadow-2xl overflow-hidden select-none">
-                    {/* Grass Striping Pattern */}
-                    <div className="absolute inset-0 bg-[repeating-linear-gradient(to_bottom,#165B33_0px,#165B33_40px,#134F2C_40px,#134F2C_80px)] opacity-90" />
+                  {/* ================= DIVIDER ================= */}
+                  <div className="relative py-2 flex items-center justify-center">
+                    <div className="absolute inset-0 flex items-center">
+                      <div className="w-full border-t border-white/10" />
+                    </div>
+                    <span className="relative px-5 py-1.5 rounded-full bg-[#14181B] border border-white/15 text-xs font-mono font-black text-gray-300 shadow-xl tracking-widest">
+                      VS
+                    </span>
+                  </div>
 
-                    {/* Outer Field Lines */}
-                    <div className="absolute inset-2 sm:inset-3 border-2 border-white/40 rounded-xl pointer-events-none" />
+                  {/* ================= TEAM 2: AWAY PITCH ================= */}
+                  <div className="space-y-3">
+                    {/* Away Header */}
+                    <div className="flex items-center justify-between bg-gradient-to-r from-amber-950/70 via-[#14181B] to-[#14181B] border border-amber-500/30 rounded-2xl p-3 sm:p-4 shadow-xl">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="flex h-11 w-11 sm:h-13 sm:w-13 shrink-0 items-center justify-center rounded-2xl bg-black/50 p-2 border border-amber-500/30 shadow-inner">
+                          {match.away_crest ? (
+                            <img src={match.away_crest} alt="" className="h-full w-full object-contain drop-shadow" />
+                          ) : (
+                            <span className="text-xs font-black text-amber-400">
+                              {String(match.away_team || 'A').slice(0, 2).toUpperCase()}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex flex-col min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4 className="text-base sm:text-lg font-black text-white truncate">{match.away_team}</h4>
+                            <span className="px-2.5 py-0.5 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-400 font-mono text-xs sm:text-sm font-black shadow-sm">
+                              {awayRoster.formation}
+                            </span>
+                          </div>
+                          {awayRoster.manager && (
+                            <span className="text-xs text-gray-400 truncate mt-0.5">
+                              {isAr ? 'المدرب:' : 'Coach:'} <strong className="text-gray-200">{awayRoster.manager}</strong>
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/40 text-xs font-bold text-amber-400 shrink-0">
+                        <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+                        <span>{isAr ? 'الفريق الضيف' : 'Away Team'}</span>
+                      </div>
+                    </div>
 
-                    {/* Halfway Line & Center Circle */}
-                    <div className="absolute top-1/2 left-2 right-2 sm:left-3 sm:right-3 border-t-2 border-white/40 -translate-y-1/2 pointer-events-none" />
-                    <div className="absolute top-1/2 left-1/2 h-24 w-24 sm:h-28 sm:w-28 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white/40 pointer-events-none" />
-                    <div className="absolute top-1/2 left-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white/60 pointer-events-none" />
-
-                    {/* Top Penalty Box (Away Defense / Home Attack) */}
-                    <div className="absolute top-2 sm:top-3 left-1/2 -translate-x-1/2 w-44 sm:w-56 h-20 sm:h-24 border-b-2 border-x-2 border-white/40 bg-white/[0.02] pointer-events-none" />
-                    <div className="absolute top-2 sm:top-3 left-1/2 -translate-x-1/2 w-20 sm:w-28 h-8 sm:h-10 border-b-2 border-x-2 border-white/40 pointer-events-none" />
-                    <div className="absolute top-16 sm:top-20 left-1/2 -translate-x-1/2 h-1.5 w-1.5 rounded-full bg-white/60 pointer-events-none" />
-
-                    {/* Bottom Penalty Box (Home Defense / Away Attack) */}
-                    <div className="absolute bottom-2 sm:bottom-3 left-1/2 -translate-x-1/2 w-44 sm:w-56 h-20 sm:h-24 border-t-2 border-x-2 border-white/40 bg-white/[0.02] pointer-events-none" />
-                    <div className="absolute bottom-2 sm:bottom-3 left-1/2 -translate-x-1/2 w-20 sm:w-28 h-8 sm:h-10 border-t-2 border-x-2 border-white/40 pointer-events-none" />
-                    <div className="absolute bottom-16 sm:bottom-20 left-1/2 -translate-x-1/2 h-1.5 w-1.5 rounded-full bg-white/60 pointer-events-none" />
-
-                    {/* AWAY PLAYERS (TOP HALF) */}
-                    {renderTacticalFormation(awayRoster.starting, awayRoster.formation, false)}
-
-                    {/* HOME PLAYERS (BOTTOM HALF) */}
-                    {renderTacticalFormation(homeRoster.starting, homeRoster.formation, true)}
+                    {/* Dedicated Away Pitch */}
+                    <SoccerPitch
+                      starting={awayRoster.starting}
+                      formation={awayRoster.formation}
+                      isHome={false}
+                      isAr={isAr}
+                    />
                   </div>
 
                   {/* ================= BENCH & MANAGERS ================= */}
@@ -777,7 +829,7 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
                       </div>
                     </div>
                   </div>
-                </>
+                </div>
               )}
             </div>
           )}
@@ -788,9 +840,60 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
 }
 
 /**
- * Calculates responsive tactical player nodes on the pitch
- * isHome = true (Bottom half, attacking upwards)
- * isHome = false (Top half, attacking downwards)
+ * Individual Full Tactical Pitch Component
+ * Displays one team on a dedicated, full-size soccer pitch attacking upwards.
+ */
+function SoccerPitch({ starting = [], formation = '4-3-3', isHome = true, isAr = false }) {
+  return (
+    <div className="relative mx-auto w-full max-w-[620px] h-[520px] sm:h-[600px] rounded-3xl border-2 border-white/30 bg-[#165B33] shadow-2xl overflow-hidden select-none">
+      {/* Grass Striping Pattern */}
+      <div className="absolute inset-0 bg-[repeating-linear-gradient(to_bottom,#165B33_0px,#165B33_45px,#134F2C_45px,#134F2C_90px)] opacity-90" />
+
+      {/* Pitch Vignette */}
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_55%,rgba(0,0,0,0.35)_100%)] pointer-events-none" />
+
+      {/* Outer Field Lines */}
+      <div className="absolute inset-2 sm:inset-3 border-2 border-white/40 rounded-2xl pointer-events-none" />
+
+      {/* Halfway Line & Center Circle */}
+      <div className="absolute top-1/2 left-2 right-2 sm:left-3 sm:right-3 border-t-2 border-white/40 -translate-y-1/2 pointer-events-none" />
+      <div className="absolute top-1/2 left-1/2 h-28 w-28 sm:h-32 sm:w-32 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white/40 pointer-events-none" />
+      <div className="absolute top-1/2 left-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white/70 pointer-events-none" />
+
+      {/* Top Penalty Box (Attacking Goal) */}
+      <div className="absolute top-2 sm:top-3 left-1/2 -translate-x-1/2 w-48 sm:w-64 h-20 sm:h-24 border-b-2 border-x-2 border-white/40 bg-white/[0.02] pointer-events-none" />
+      <div className="absolute top-2 sm:top-3 left-1/2 -translate-x-1/2 w-24 sm:w-32 h-8 sm:h-10 border-b-2 border-x-2 border-white/40 pointer-events-none" />
+      <div className="absolute top-16 sm:top-20 left-1/2 -translate-x-1/2 h-2 w-2 rounded-full bg-white/70 pointer-events-none" />
+      <div className="absolute top-20 sm:top-24 left-1/2 -translate-x-1/2 w-24 h-10 border-b-2 border-white/40 rounded-b-full pointer-events-none" />
+
+      {/* Bottom Penalty Box (Goalkeeper / Defending Goal) */}
+      <div className="absolute bottom-2 sm:bottom-3 left-1/2 -translate-x-1/2 w-48 sm:w-64 h-20 sm:h-24 border-t-2 border-x-2 border-white/40 bg-white/[0.02] pointer-events-none" />
+      <div className="absolute bottom-2 sm:bottom-3 left-1/2 -translate-x-1/2 w-24 sm:w-32 h-8 sm:h-10 border-t-2 border-x-2 border-white/40 pointer-events-none" />
+      <div className="absolute bottom-16 sm:bottom-20 left-1/2 -translate-x-1/2 h-2 w-2 rounded-full bg-white/70 pointer-events-none" />
+      <div className="absolute bottom-20 sm:bottom-24 left-1/2 -translate-x-1/2 w-24 h-10 border-t-2 border-white/40 rounded-t-full pointer-events-none" />
+
+      {/* Corner Arcs */}
+      <div className="absolute top-2 sm:top-3 left-2 sm:left-3 w-6 h-6 border-b-2 border-r-2 border-white/40 rounded-br-full pointer-events-none" />
+      <div className="absolute top-2 sm:top-3 right-2 sm:right-3 w-6 h-6 border-b-2 border-l-2 border-white/40 rounded-bl-full pointer-events-none" />
+      <div className="absolute bottom-2 sm:bottom-3 left-2 sm:left-3 w-6 h-6 border-t-2 border-r-2 border-white/40 rounded-tr-full pointer-events-none" />
+      <div className="absolute bottom-2 sm:bottom-3 right-2 sm:right-3 w-6 h-6 border-t-2 border-l-2 border-white/40 rounded-tl-full pointer-events-none" />
+
+      {/* Direction of Attack Indicator */}
+      <div className="absolute top-4 right-4 sm:top-5 sm:right-5 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/50 backdrop-blur-sm border border-white/15 text-[10px] sm:text-[11px] font-black text-white/80 pointer-events-none shadow-lg">
+        <span className="text-[#53FC18]">▲</span>
+        <span>{isAr ? 'اتجاه الهجوم' : 'Direction of Attack'}</span>
+      </div>
+
+      {/* Tactical Players Node Layer */}
+      {renderTacticalFormation(starting, formation, isHome)}
+    </div>
+  );
+}
+
+/**
+ * Calculates responsive tactical player nodes spanning a dedicated full pitch (attacking upwards)
+ * Line 0: Goalkeeper at ~88% (defending goal)
+ * Line N-1: Forwards / Strikers at ~14% (attacking goal)
  */
 function renderTacticalFormation(players = [], formationStr = '4-3-3', isHome = true) {
   if (!players || players.length === 0) return null;
@@ -799,28 +902,21 @@ function renderTacticalFormation(players = [], formationStr = '4-3-3', isHome = 
   const rows = formationStr.split('-').map((n) => parseInt(n, 10)).filter((n) => !isNaN(n));
   if (rows.length === 0) rows.push(4, 3, 3);
 
-  // Row breakdown with Goalkeeper as row 0
-  const lineStructure = [1, ...rows]; // e.g. [1, 4, 3, 3]
+  // Row breakdown with Goalkeeper as line 0 at bottom
+  const lineStructure = [1, ...rows]; // e.g. [1, 4, 2, 3, 1]
   let playerIdx = 0;
-
   const totalLines = lineStructure.length;
 
   return (
     <div className="absolute inset-0 pointer-events-auto">
       {lineStructure.map((countInRow, lineIdx) => {
-        // Vertical positioning
-        // Home: Line 0 (GK) at ~93%, Line N (FW) at ~57%
-        // Away: Line 0 (GK) at ~7%, Line N (FW) at ~43%
-        let topPct = 0;
-        if (isHome) {
-          const tMin = 57;
-          const tMax = 93;
-          topPct = tMax - (lineIdx / (totalLines - 1)) * (tMax - tMin);
-        } else {
-          const tMin = 7;
-          const tMax = 43;
-          topPct = tMin + (lineIdx / (totalLines - 1)) * (tMax - tMin);
-        }
+        // Vertical positioning: line 0 (GK) at 88%, line N-1 (FW) at 14%
+        const tMin = 14;
+        const tMax = 88;
+        const topPct =
+          totalLines > 1
+            ? tMax - (lineIdx / (totalLines - 1)) * (tMax - tMin)
+            : 50;
 
         const rowPlayers = [];
         for (let i = 0; i < countInRow; i++) {
@@ -840,17 +936,17 @@ function renderTacticalFormation(players = [], formationStr = '4-3-3', isHome = 
               return (
                 <div
                   key={`${player.num || ''}-${player.name}`}
-                  className="absolute flex flex-col items-center justify-center -translate-x-1/2 -translate-y-1/2 transition-transform hover:scale-120 hover:z-30 cursor-pointer select-none"
+                  className="absolute flex flex-col items-center justify-center -translate-x-1/2 -translate-y-1/2 transition-transform hover:scale-115 hover:z-30 cursor-pointer select-none"
                   style={{ top: `${topPct}%`, left: `${leftPct}%` }}
                   title={`${player.name} (${player.pos || ''}) #${player.num || ''}${player.rating ? ` • Rating: ${player.rating}` : ''}`}
                 >
                   {/* Player Events (Goals, Assists, Cards, Subs) */}
                   {player.events && player.events.length > 0 && (
-                    <div className="absolute -top-3 flex items-center gap-0.5 z-20 bg-black/90 backdrop-blur-md px-1.5 py-0.5 rounded-full border border-white/20 shadow-lg">
+                    <div className="absolute -top-3.5 sm:-top-4 flex items-center gap-0.5 z-20 bg-black/95 backdrop-blur-md px-1.5 py-0.5 rounded-full border border-white/20 shadow-xl">
                       {player.events.map((ev, i) => (
                         <span
                           key={i}
-                          className="text-[9px] sm:text-[10px] leading-none flex items-center gap-0.5 font-bold"
+                          className="text-[10px] sm:text-[11px] leading-none flex items-center gap-0.5 font-bold"
                           title={`${ev.type} ${ev.minute || ''}`}
                         >
                           {ev.type === 'goal' && (
@@ -867,26 +963,27 @@ function renderTacticalFormation(players = [], formationStr = '4-3-3', isHome = 
                     </div>
                   )}
 
-                  {/* Player Photo or Silhouette Avatar */}
+                  {/* Scaled-up Player Avatar (size="lg") */}
                   <PlayerAvatar
                     photo={player.photo}
                     name={player.name}
                     num={player.num}
                     isHome={isHome}
                     pos={player.pos}
+                    size="lg"
                   />
 
                   {/* Flashscore-style Rating Badge for FT / Finished matches */}
                   {ratingStyle && (
                     <div
-                      className={`-mt-2 z-10 flex items-center justify-center min-w-[24px] sm:min-w-[28px] h-4 px-1 rounded-md border font-mono font-black text-[9px] sm:text-[10px] shadow-md tracking-tight ${ratingStyle.bg} ${ratingStyle.text} ${ratingStyle.border}`}
+                      className={`-mt-1.5 z-10 flex items-center justify-center min-w-[26px] sm:min-w-[30px] h-4 sm:h-4.5 px-1 rounded-md border font-mono font-black text-[9px] sm:text-[10px] shadow-md tracking-tight ${ratingStyle.bg} ${ratingStyle.text} ${ratingStyle.border}`}
                     >
                       {ratingStyle.label}
                     </div>
                   )}
 
-                  {/* Player Name Tag */}
-                  <span className="mt-0.5 max-w-[70px] sm:max-w-[84px] truncate rounded bg-black/85 backdrop-blur-sm border border-white/10 px-1 py-0.2 text-[9px] sm:text-[10px] font-extrabold text-white text-center shadow-md">
+                  {/* Scaled-up Player Name Tag */}
+                  <span className="mt-1 max-w-[85px] sm:max-w-[105px] truncate rounded-md bg-black/90 backdrop-blur-md border border-white/15 px-1.5 py-0.5 text-[10px] sm:text-xs font-black text-white text-center shadow-lg leading-tight">
                     {player.name}
                   </span>
                 </div>
@@ -901,9 +998,7 @@ function renderTacticalFormation(players = [], formationStr = '4-3-3', isHome = 
 
 /**
  * Professional Player Avatar Component
- * 1. Shows player headshot image (player.photo) when provided.
- * 2. If photo is missing or fails to load, gracefully falls back to a sleek gray silhouette bust.
- * 3. Never renders a plain colored circle. Overlays jersey number in a neat corner badge.
+ * Supports size="sm" (substitutes bench), size="md", and size="lg" (tactical pitch nodes)
  */
 function PlayerAvatar({ photo, name, num, rating, isHome, pos, size = 'md' }) {
   const [imgFailed, setImgFailed] = useState(false);
@@ -916,21 +1011,33 @@ function PlayerAvatar({ photo, name, num, rating, isHome, pos, size = 'md' }) {
   const hasPhoto = Boolean(proxiedPhoto && !imgFailed);
   const isGK = pos === 'GK' || num === 1;
 
-  const sizeClasses = size === 'sm' ? 'h-6 w-6' : 'h-8 w-8 sm:h-10 sm:w-10';
+  const sizeClasses =
+    size === 'sm'
+      ? 'h-7 w-7'
+      : size === 'md'
+      ? 'h-9 w-9 sm:h-10 sm:w-10'
+      : 'h-12 w-12 sm:h-14 sm:w-14'; // size === 'lg'
+
+  const numClasses =
+    size === 'sm'
+      ? 'text-[8px] h-3.5 min-w-[14px]'
+      : size === 'md'
+      ? 'text-[8px] sm:text-[9px] h-3.5 min-w-[15px]'
+      : 'text-[9px] sm:text-[10px] h-4 min-w-[17px] font-black -bottom-1 -right-1';
 
   const ringClasses = isHome
     ? isGK
-      ? 'border-yellow-400 bg-amber-950/60 shadow-yellow-500/20'
-      : 'border-emerald-400 bg-emerald-950/60 shadow-emerald-500/20'
+      ? 'border-yellow-400 bg-amber-950/60 shadow-yellow-500/30'
+      : 'border-emerald-400 bg-emerald-950/60 shadow-emerald-500/30'
     : isGK
-    ? 'border-purple-400 bg-purple-950/60 shadow-purple-500/20'
-    : 'border-amber-400 bg-amber-950/60 shadow-amber-500/20';
+    ? 'border-purple-400 bg-purple-950/60 shadow-purple-500/30'
+    : 'border-amber-400 bg-amber-950/60 shadow-amber-500/30';
 
   return (
     <div className="relative inline-flex items-center justify-center select-none group">
       {/* Circular Avatar Container */}
       <div
-        className={`relative flex ${sizeClasses} items-center justify-center rounded-full border-2 overflow-hidden shadow-lg transition-transform ${ringClasses}`}
+        className={`relative flex ${sizeClasses} items-center justify-center rounded-full border-2 overflow-hidden shadow-xl transition-transform ${ringClasses}`}
       >
         {hasPhoto ? (
           <img
@@ -963,7 +1070,7 @@ function PlayerAvatar({ photo, name, num, rating, isHome, pos, size = 'md' }) {
       {/* Jersey Number Badge Overlay */}
       {num != null && (
         <span
-          className={`absolute -bottom-1 -right-1 flex h-3.5 min-w-[15px] px-0.5 items-center justify-center rounded-full text-[8px] sm:text-[9px] font-mono font-black border shadow-md ${
+          className={`absolute ${numClasses} px-0.5 flex items-center justify-center rounded-full font-mono border shadow-md ${
             isHome
               ? isGK
                 ? 'bg-yellow-400 text-black border-black/30'
@@ -976,8 +1083,6 @@ function PlayerAvatar({ photo, name, num, rating, isHome, pos, size = 'md' }) {
           {num}
         </span>
       )}
-
-
     </div>
   );
 }
