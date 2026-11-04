@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css';
 import { T } from './constants/translations';
 import { api, API_BASE } from './utils/api';
-import { localDateKey, formatDayLabel } from './utils/dateUtils';
+import { localDateKey, utcDateKey, isMatchOnDate, formatDayLabel } from './utils/dateUtils';
 import Header from './components/Header';
 import Hero from './components/Hero';
 import LeagueSelector from './components/LeagueSelector';
@@ -117,10 +117,13 @@ export default function App() {
         if (round) qs.set('round', round);
         nextData = await api(`/matches?${qs.toString()}`);
       }
-      const dates = Array.from(new Set((nextData.matches || []).map((m) => localDateKey(m.utc_date)).filter(Boolean))).sort();
+      const dates = Array.from(new Set((nextData.matches || []).flatMap((m) => [localDateKey(m.utc_date), utcDateKey(m.utc_date)]).filter(Boolean))).sort();
       const todayKey = localDateKey(new Date());
       setData(nextData);
-      setSelectedDate(dates.find((date) => date >= todayKey) || dates[0] || '');
+      setSelectedDate((prev) => {
+        if (prev && dates.includes(prev)) return prev;
+        return dates.find((date) => date >= todayKey) || dates[0] || '';
+      });
       setSelectedTeam('');
     } catch (e) {
       setLoadError(e.message);
@@ -194,7 +197,14 @@ export default function App() {
 
   const allMatches = useMemo(() => data?.matches || [], [data?.matches]);
   const availableDates = useMemo(() => {
-    const rawDates = Array.from(new Set(allMatches.map((m) => localDateKey(m.utc_date)).filter(Boolean))).sort();
+    const dateSet = new Set();
+    for (const m of allMatches) {
+      const lk = localDateKey(m.utc_date);
+      if (lk) dateSet.add(lk);
+      const uk = utcDateKey(m.utc_date);
+      if (uk) dateSet.add(uk);
+    }
+    const rawDates = Array.from(dateSet).sort();
     if (rawDates.length === 0) return [];
     const todayKey = localDateKey(new Date());
     const minStr = rawDates[0] < todayKey ? rawDates[0] : todayKey;
@@ -218,7 +228,7 @@ export default function App() {
       const teamMatches = !selectedTeam || m.home_team === selectedTeam || m.away_team === selectedTeam;
       return isLive && teamMatches;
     }
-    const dateMatches = !selectedDate || localDateKey(m.utc_date) === selectedDate;
+    const dateMatches = !selectedDate || isMatchOnDate(m.utc_date, selectedDate);
     const teamMatches = !selectedTeam || m.home_team === selectedTeam || m.away_team === selectedTeam;
     return dateMatches && teamMatches;
   });
@@ -351,7 +361,7 @@ export default function App() {
                 <div className="kp-date-strip" aria-label="Choose match day">
                   {availableDates.length ? availableDates.slice(0, 9).map((date) => {
                     const label = formatDayLabel(date, lang);
-                    const dayCount = allMatches.filter((m) => localDateKey(m.utc_date) === date).length;
+                    const dayCount = allMatches.filter((m) => isMatchOnDate(m.utc_date, date)).length;
                     return (
                       <button
                         key={date}
@@ -444,11 +454,15 @@ export default function App() {
                       ? (lang === 'ar' ? 'لا توجد أي مباراة تلعب الآن. تصفح باقي الدوريات لمتابعة جدول المباريات القادمة.' : 'No matches are currently in progress. Select a league or All Leagues to check upcoming fixtures.')
                       : (lang === 'ar' ? 'جرّب يومًا آخر أو اختر دوريًا مختلفًا.' : 'Try another day or choose a different league.')}
                   </p>
-                  {competition === 'LIVE' && (
+                  {competition === 'LIVE' ? (
                     <button className="kp-primary-small" onClick={() => changeCompetition('ALL')}>
                       {lang === 'ar' ? 'عرض كل الدوريات' : 'View All Leagues'}
                     </button>
-                  )}
+                  ) : competition !== 'ALL' ? (
+                    <button className="kp-primary-small" onClick={() => changeCompetition('ALL')}>
+                      {lang === 'ar' ? 'عرض كل الدوريات لهذا اليوم' : 'View All Leagues for this Day'}
+                    </button>
+                  ) : null}
                   {selectedTeam && (
                     <button className="kp-primary-small" onClick={() => setSelectedTeam('')}>
                       {lang === 'ar' ? 'عرض كل المباريات' : 'Show all matches'}

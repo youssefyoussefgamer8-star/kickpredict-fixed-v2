@@ -787,56 +787,114 @@ app.get(
       'Surrogate-Control': 'no-store'
     });
     const competition = String(req.query.competition || COMPETITIONS[0]).toUpperCase();
-    if (!COMPETITIONS.includes(competition)) {
+    const isAll = competition === 'ALL';
+    if (!isAll && !COMPETITIONS.includes(competition)) {
       return res.status(400).json({ error: 'Unknown competition.' });
     }
 
-    const roundsRes = await pool.query(
-      `SELECT round_key,
-              MIN(utc_date) AS first_date,
-              MAX(utc_date) AS last_date,
-              MIN(utc_date) FILTER (WHERE status IN ('TIMED', 'SCHEDULED') AND utc_date >= NOW() - INTERVAL '3 hours') AS next_upcoming_date,
-              COUNT(*) FILTER (WHERE status IN ('TIMED', 'SCHEDULED') AND utc_date >= NOW() - INTERVAL '3 hours') AS upcoming_count,
-              MAX(round_label) AS label
-       FROM matches
-       WHERE competition_code = $1
-         AND round_key IS NOT NULL
-         AND (flashscore_id IS NOT NULL OR utc_date >= NOW() - INTERVAL '4 days')
-       GROUP BY round_key
-       ORDER BY MIN(utc_date) ASC`,
-      [competition]
-    );
-    const rounds = roundsRes.rows.map((r) => ({ key: r.round_key, label: r.label }));
+    const targetStart = req.query.startDate || req.query.date;
+    const targetEnd = req.query.endDate || req.query.date || targetStart;
+    const hasDateFilter = Boolean(targetStart);
 
-    if (rounds.length === 0) {
-      return res.json({ competition, rounds: [], round: null, maxBoosts: MAX_BOOSTS, boostsUsed: 0, matches: [] });
+    let rounds = [];
+    let roundKey = null;
+    let matches = [];
+
+    if (hasDateFilter) {
+      // Date range filtering across full calendar day with timezone resilience
+      const dateFilterQuery = `
+        SELECT id, external_id, fotmob_id, flashscore_id, competition_code, round_key, round_label,
+               home_team, home_crest, away_team, away_crest,
+               utc_date, status, home_score, away_score, home_ht, away_ht,
+               home_lambda, away_lambda, markets_points, settled_outcomes,
+               match_stats, match_incidents, match_lineups,
+               (NOW() >= utc_date OR status NOT IN ('TIMED', 'SCHEDULED')) AS is_locked
+        FROM matches
+        WHERE (${isAll ? 'competition_code = ANY($1::varchar[])' : 'competition_code = $1'})
+          AND (fotmob_id IS NOT NULL OR flashscore_id IS NOT NULL OR utc_date >= NOW() - INTERVAL '4 days')
+          AND (
+            (utc_date AT TIME ZONE 'UTC')::date BETWEEN $2::date AND $3::date
+            OR (utc_date AT TIME ZONE 'Africa/Tunis')::date BETWEEN $2::date AND $3::date
+            OR (utc_date AT TIME ZONE 'Europe/London')::date BETWEEN $2::date AND $3::date
+          )
+        ORDER BY utc_date ASC, id ASC
+      `;
+      const params = isAll ? [COMPETITIONS, targetStart, targetEnd] : [competition, targetStart, targetEnd];
+      const mRes = await pool.query(dateFilterQuery, params);
+      matches = mRes.rows;
+      rounds = [...new Set(matches.map((m) => m.round_key).filter(Boolean))].map((k) => ({
+        key: k,
+        label: matches.find((m) => m.round_key === k)?.round_label || k
+      }));
+      roundKey = rounds[0]?.key || null;
+    } else if (isAll) {
+      // ALL competitions without date filter
+      const allMatchesRes = await pool.query(
+        `SELECT id, external_id, fotmob_id, flashscore_id, competition_code, round_key, round_label,
+                home_team, home_crest, away_team, away_crest,
+                utc_date, status, home_score, away_score, home_ht, away_ht,
+                home_lambda, away_lambda, markets_points, settled_outcomes,
+                match_stats, match_incidents, match_lineups,
+                (NOW() >= utc_date OR status NOT IN ('TIMED', 'SCHEDULED')) AS is_locked
+         FROM matches
+         WHERE competition_code = ANY($1::varchar[])
+           AND (fotmob_id IS NOT NULL OR flashscore_id IS NOT NULL OR utc_date >= NOW() - INTERVAL '4 days')
+         ORDER BY utc_date ASC, id ASC`,
+        [COMPETITIONS]
+      );
+      matches = allMatchesRes.rows;
+      rounds = [];
+      roundKey = null;
+    } else {
+      // Single competition standard round selection
+      const roundsRes = await pool.query(
+        `SELECT round_key,
+                MIN(utc_date) AS first_date,
+                MAX(utc_date) AS last_date,
+                MIN(utc_date) FILTER (WHERE status IN ('TIMED', 'SCHEDULED') AND utc_date >= NOW() - INTERVAL '3 hours') AS next_upcoming_date,
+                COUNT(*) FILTER (WHERE status IN ('TIMED', 'SCHEDULED') AND utc_date >= NOW() - INTERVAL '3 hours') AS upcoming_count,
+                MAX(round_label) AS label
+         FROM matches
+         WHERE competition_code = $1
+           AND round_key IS NOT NULL
+           AND (fotmob_id IS NOT NULL OR flashscore_id IS NOT NULL OR utc_date >= NOW() - INTERVAL '4 days')
+         GROUP BY round_key
+         ORDER BY MIN(utc_date) ASC`,
+        [competition]
+      );
+      rounds = roundsRes.rows.map((r) => ({ key: r.round_key, label: r.label }));
+
+      if (rounds.length === 0) {
+        return res.json({ competition, rounds: [], round: null, maxBoosts: MAX_BOOSTS, boostsUsed: 0, matches: [] });
+      }
+
+      roundKey =
+        req.query.round && rounds.some((r) => r.key === req.query.round) ? String(req.query.round) : null;
+
+      if (!roundKey) {
+        const upcomingRounds = roundsRes.rows
+          .filter((r) => Number(r.upcoming_count) > 0 && r.next_upcoming_date)
+          .sort((a, b) => new Date(a.next_upcoming_date) - new Date(b.next_upcoming_date));
+        const current = upcomingRounds.find((r) => Number(r.upcoming_count) >= 2) || upcomingRounds[0];
+        roundKey = (current || roundsRes.rows[roundsRes.rows.length - 1]).round_key;
+      }
+
+      const mRes = await pool.query(
+        `SELECT id, external_id, fotmob_id, flashscore_id, competition_code, round_key, round_label,
+                home_team, home_crest, away_team, away_crest,
+                utc_date, status, home_score, away_score, home_ht, away_ht,
+                home_lambda, away_lambda, markets_points, settled_outcomes,
+                match_stats, match_incidents, match_lineups,
+                (NOW() >= utc_date OR status NOT IN ('TIMED', 'SCHEDULED')) AS is_locked
+         FROM matches
+         WHERE competition_code = $1
+           AND round_key = $2
+           AND (fotmob_id IS NOT NULL OR flashscore_id IS NOT NULL OR utc_date >= NOW() - INTERVAL '4 days')
+         ORDER BY utc_date ASC, id ASC`,
+        [competition, roundKey]
+      );
+      matches = mRes.rows;
     }
-
-    let roundKey =
-      req.query.round && rounds.some((r) => r.key === req.query.round) ? String(req.query.round) : null;
-
-    if (!roundKey) {
-      const upcomingRounds = roundsRes.rows
-        .filter((r) => Number(r.upcoming_count) > 0 && r.next_upcoming_date)
-        .sort((a, b) => new Date(a.next_upcoming_date) - new Date(b.next_upcoming_date));
-      const current = upcomingRounds.find((r) => Number(r.upcoming_count) >= 2) || upcomingRounds[0];
-      roundKey = (current || roundsRes.rows[roundsRes.rows.length - 1]).round_key;
-    }
-
-    const { rows: matches } = await pool.query(
-      `SELECT id, external_id, flashscore_id, competition_code, round_key, round_label,
-              home_team, home_crest, away_team, away_crest,
-              utc_date, status, home_score, away_score, home_ht, away_ht,
-              home_lambda, away_lambda, markets_points, settled_outcomes,
-              match_stats, match_incidents, match_lineups,
-              (NOW() >= utc_date OR status NOT IN ('TIMED', 'SCHEDULED')) AS is_locked
-       FROM matches
-       WHERE competition_code = $1
-         AND round_key = $2
-         AND (flashscore_id IS NOT NULL OR utc_date >= NOW() - INTERVAL '4 days')
-       ORDER BY utc_date ASC, id ASC`,
-      [competition, roundKey]
-    );
 
     const userPredictions = {};
     let boostsUsed = 0;
@@ -851,7 +909,7 @@ app.get(
       );
       for (const p of predRes.rows) userPredictions[p.match_id] = p;
 
-      if (MAX_BOOSTS > 0) {
+      if (MAX_BOOSTS > 0 && !isAll && roundKey) {
         const boostRes = await pool.query(
           `SELECT boosts_used FROM user_round_boosts
            WHERE user_id = $1 AND competition_code = $2 AND round_key = $3`,
@@ -864,30 +922,33 @@ app.get(
     const hasActiveMatches = matches.some(
       (m) => m.status !== 'FINISHED' && (m.is_locked || ['IN_PLAY', 'PAUSED'].includes(m.status))
     );
-    const espnEvents = hasActiveMatches ? await fetchEspnScoreboard(competition) : [];
+    const espnEvents = (!isAll && hasActiveMatches) ? await fetchEspnScoreboard(competition) : [];
 
-    // Fetch official standings from standings table first
-    const standingsRes = await pool.query(
-      `SELECT team_name as team, crest, rank, played, won, drawn, lost, gf, ga, gd, points
-       FROM standings
-       WHERE competition_code = $1
-       ORDER BY rank ASC`,
-      [competition]
-    );
-
-    // Fetch finished matches in this competition for Standings Table + Last 5 Form
-    const finishedMatchesRes = await pool.query(
-      `SELECT home_team, home_crest, away_team, away_crest, home_score, away_score, utc_date, stage
-       FROM matches
-       WHERE competition_code = $1
-         AND status = 'FINISHED'
-         AND home_score IS NOT NULL
-         AND away_score IS NOT NULL
-       ORDER BY utc_date DESC`,
-      [competition]
-    );
-    const { standings: fallbackStandings, teamMatches } = buildStandingsAndForm(finishedMatchesRes.rows, competition);
-    const standings = standingsRes.rows.length > 0 ? standingsRes.rows : fallbackStandings;
+    // Fetch official standings & team form
+    let standings = [];
+    let teamMatches = new Map();
+    if (!isAll) {
+      const standingsRes = await pool.query(
+        `SELECT team_name as team, crest, rank, played, won, drawn, lost, gf, ga, gd, points
+         FROM standings
+         WHERE competition_code = $1
+         ORDER BY rank ASC`,
+        [competition]
+      );
+      const finishedMatchesRes = await pool.query(
+        `SELECT home_team, home_crest, away_team, away_crest, home_score, away_score, utc_date, stage
+         FROM matches
+         WHERE competition_code = $1
+           AND status = 'FINISHED'
+           AND home_score IS NOT NULL
+           AND away_score IS NOT NULL
+         ORDER BY utc_date DESC`,
+        [competition]
+      );
+      const built = buildStandingsAndForm(finishedMatchesRes.rows, competition);
+      teamMatches = built.teamMatches;
+      standings = standingsRes.rows.length > 0 ? standingsRes.rows : built.standings;
+    }
 
     // Fetch all predictions on this round's matches for "HOW THE ROOM PLAYED"
     const allRoundPredsRes =
@@ -903,7 +964,7 @@ app.get(
 
     res.json({
       competition,
-      competition_name: COMPETITION_NAMES[competition] || competition,
+      competition_name: isAll ? 'All Leagues' : (COMPETITION_NAMES[competition] || competition),
       rounds,
       round: roundKey,
       maxBoosts: MAX_BOOSTS,
@@ -943,7 +1004,7 @@ app.get(
         }
         return {
           ...m,
-          competition_name: COMPETITION_NAMES[competition] || competition,
+          competition_name: COMPETITION_NAMES[rawMatch.competition_code] || rawMatch.competition_code,
           markets_points:
             m.markets_points ||
             buildMarketsPoints(
