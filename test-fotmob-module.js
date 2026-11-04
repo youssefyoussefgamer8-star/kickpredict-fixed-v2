@@ -5,6 +5,7 @@ const {
   teamsMatch,
   mapFotmobPosition,
   parseFotmobLineup,
+  parseFotmobStats,
   findFotmobMatchId,
   fetchFotmobLineup,
   smartLivePollingFotmob
@@ -268,12 +269,61 @@ console.log('✓ Mock lineup parsing and events mapping verified');
     }
   });
 
-  const lineupUpdate = earlyQueries.find(q => q.sql.includes('match_lineups = $1::jsonb'));
+  const lineupUpdate = earlyQueries.find(q => q.sql.includes('match_lineups'));
   assert.ok(lineupUpdate, 'Early lineup must be persisted to PostgreSQL within 75m window');
   const savedEarly = JSON.parse(lineupUpdate.params[0]);
   assert.strictEqual(savedEarly.startingHome.length, 11, 'Should save 11 home starters');
   assert.strictEqual(savedEarly.startingAway.length, 11, 'Should save 11 away starters');
   console.log('✓ 75-minute early lineup radar window verified: official lineups captured and persisted before kickoff');
+
+  // 7. Test FotMob match stats parser
+  console.log('\nTesting FotMob match stats parser...');
+  const mockStatsData = {
+    content: {
+      stats: {
+        Periods: {
+          All: {
+            stats: [
+              {
+                title: 'Top stats',
+                stats: [
+                  { title: 'Ball possession', key: 'possession', stats: ['62%', '38%'], rawStats: [{ value: 62 }, { value: 38 }] },
+                  { title: 'Expected goals (xG)', key: 'xg', stats: ['2.14', '0.78'], rawStats: [{ value: 2.14 }, { value: 0.78 }] }
+                ]
+              },
+              {
+                title: 'Shots',
+                stats: [
+                  { title: 'Total shots', key: 'shots', stats: [14, 6] },
+                  { title: 'Shots on target', key: 'target', stats: [7, 2] }
+                ]
+              },
+              {
+                title: 'Discipline',
+                stats: [
+                  { title: 'Fouls committed', key: 'fouls', stats: [8, 12] },
+                  { title: 'Yellow cards', key: 'yellow_cards', stats: [1, 3] }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    }
+  };
+
+  const parsedStats = parseFotmobStats(mockStatsData);
+  assert.strictEqual(parsedStats.length, 6, 'Should extract 6 unique stats across groups');
+  assert.strictEqual(parsedStats[0].name, 'Ball possession');
+  assert.strictEqual(parsedStats[0].homeVal, 62);
+  assert.strictEqual(parsedStats[0].awayVal, 38);
+  assert.strictEqual(parsedStats[0].group, 'Top stats');
+  assert.strictEqual(parsedStats[1].name, 'Expected goals (xG)');
+  assert.strictEqual(parsedStats[1].homeVal, 2.14);
+  assert.strictEqual(parsedStats[4].name, 'Fouls committed');
+  assert.strictEqual(parsedStats[4].homeVal, 8);
+  assert.strictEqual(parsedStats[4].awayVal, 12);
+  console.log('✓ parseFotmobStats verified: extracts normalized metrics, values, keys, and categories');
 
   console.log('\nAll FotMob module tests passed 100%!');
 })();

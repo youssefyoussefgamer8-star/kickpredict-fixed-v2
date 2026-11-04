@@ -59,6 +59,190 @@ function getRatingStyle(ratingVal) {
   };
 }
 
+// Arabic translations dictionary for FotMob match statistics
+const STAT_TRANSLATIONS_AR = {
+  'ball possession': 'الاستحواذ على الكرة',
+  'possession': 'الاستحواذ على الكرة',
+  'expected goals (xg)': 'الأهداف المتوقعة (xG)',
+  'xg': 'الأهداف المتوقعة (xG)',
+  'total shots': 'إجمالي التسديدات',
+  'shots': 'إجمالي التسديدات',
+  'shots on target': 'التسديدات على المرمى',
+  'shots off target': 'التسديدات خارج المرمى',
+  'blocked shots': 'تسديدات تم اعتراضها',
+  'big chances': 'فرص محققة',
+  'big chances missed': 'فرص محققة ضائعة',
+  'accurate passes': 'تمريرات دقيقة',
+  'pass success': 'دقة التمرير',
+  'pass accuracy': 'دقة التمرير',
+  'passes': 'التمريرات',
+  'total passes': 'إجمالي التمريرات',
+  'fouls committed': 'الأخطاء المرتكبة',
+  'fouls': 'الأخطاء المرتكبة',
+  'corner kicks': 'الضربات الركنية',
+  'corners': 'الضربات الركنية',
+  'offsides': 'حالات التسلل',
+  'yellow cards': 'البطاقات الصفراء',
+  'red cards': 'البطاقات الحمراء',
+  'goalkeeper saves': 'تصديات الحارس',
+  'saves': 'تصديات الحارس',
+  'touches in opposition box': 'لمسات في منطقة الخصم',
+  'touches in penalty area': 'لمسات في منطقة الجزاء',
+  'passes into final third': 'تمريرات في الثلث الأخير',
+  'key passes': 'تمريرات حاسمة',
+  'tackles won': 'تدخلات ناجحة',
+  'tackles': 'التدخلات الدفاعية',
+  'interceptions': 'اعتراض الكرة',
+  'clearances': 'تشتيت الكرة',
+  'aerial duels won': 'التحامات هوائية ناجحة',
+  'duels won': 'التحامات ناجحة',
+  'ground duels won': 'التحامات أرضية ناجحة',
+  'dribbles completed': 'مراوغات ناجحة',
+  'dribbles': 'المراوغات',
+  'accurate crosses': 'عرضيات دقيقة',
+  'crosses': 'العرضيات',
+  'accurate long balls': 'كرات طويلة دقيقة',
+  'long balls': 'كرات طويلة',
+  'xg open play': 'أهداف متوقعة (لعب مفتوح)',
+  'xg set play': 'أهداف متوقعة (كرات ثابتة)',
+  'xg on target (xgot)': 'أهداف متوقعة على المرمى (xGOT)',
+  'shooting accuracy': 'دقة التسديد',
+  'chances created': 'صناعة الفرص',
+  'recoveries': 'استرجاع الكرة'
+};
+
+const GROUP_TRANSLATIONS_AR = {
+  'top stats': '🔥 أهم الإحصائيات',
+  'shots': '🎯 التسديدات والمحاولات',
+  'expected goals (xg)': '📈 الأهداف المتوقعة (xG)',
+  'passes': '⚽ التمريرات وصناعة اللعب',
+  'defence': '🛡️ الدفاع والتصديات',
+  'duels': '⚔️ الالتحامات والكرات المشتركة',
+  'discipline': '🟨 الانضباط والبطاقات'
+};
+
+function getStatArabicLabel(statName) {
+  if (!statName) return 'إحصائية';
+  const clean = statName.trim().toLowerCase();
+  if (STAT_TRANSLATIONS_AR[clean]) return STAT_TRANSLATIONS_AR[clean];
+  for (const [key, val] of Object.entries(STAT_TRANSLATIONS_AR)) {
+    if (clean.includes(key) || key.includes(clean)) return val;
+  }
+  return statName;
+}
+
+function isStatReverseBetter(nameOrKey) {
+  if (!nameOrKey) return false;
+  const s = String(nameOrKey).toLowerCase();
+  return (
+    s.includes('foul') ||
+    s.includes('yellow') ||
+    s.includes('red card') ||
+    s.includes('red_card') ||
+    s.includes('offside') ||
+    s.includes('missed')
+  );
+}
+
+function renderSingleStatRow(st, isAr) {
+  const total = (st.homeVal || 0) + (st.awayVal || 0);
+  let hPct = 50;
+  let aPct = 50;
+  if (total > 0) {
+    hPct = Math.min(95, Math.max(5, Math.round(((st.homeVal || 0) / total) * 100)));
+    aPct = 100 - hPct;
+  }
+
+  const homeIsBetter = st.reverseBetter ? st.homeVal < st.awayVal : st.homeVal > st.awayVal;
+  const awayIsBetter = st.reverseBetter ? st.awayVal < st.homeVal : st.awayVal > st.homeVal;
+
+  return (
+    <div key={st.key} className="space-y-1.5">
+      {/* Metric Numbers & Label */}
+      <div className="flex items-center justify-between text-xs sm:text-sm">
+        <span
+          className={`font-mono transition-all ${
+            homeIsBetter
+              ? 'text-emerald-400 font-black text-sm sm:text-base drop-shadow-[0_0_8px_rgba(52,211,153,0.3)]'
+              : 'text-gray-300 font-bold'
+          }`}
+        >
+          {st.home}
+        </span>
+        <span className="text-xs font-extrabold text-gray-400 text-center truncate px-2 max-w-[60%]">
+          {isAr ? st.labelAr : st.labelEn}
+        </span>
+        <span
+          className={`font-mono transition-all ${
+            awayIsBetter
+              ? 'text-amber-400 font-black text-sm sm:text-base drop-shadow-[0_0_8px_rgba(251,191,36,0.3)]'
+              : 'text-gray-300 font-bold'
+          }`}
+        >
+          {st.away}
+        </span>
+      </div>
+
+      {/* Dual Progress Bar */}
+      <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-[#090C0E] border border-white/5 p-0.5">
+        <div
+          className={`h-full rounded-l-full transition-all duration-500 ${
+            homeIsBetter
+              ? 'bg-gradient-to-r from-emerald-500 to-emerald-400 shadow-[0_0_6px_rgba(16,185,129,0.5)]'
+              : 'bg-emerald-600/70'
+          }`}
+          style={{ width: `${hPct}%` }}
+        />
+        <div
+          className={`h-full rounded-r-full transition-all duration-500 ${
+            awayIsBetter
+              ? 'bg-gradient-to-r from-amber-400 to-amber-500 shadow-[0_0_6px_rgba(245,158,11,0.5)]'
+              : 'bg-amber-600/70'
+          }`}
+          style={{ width: `${aPct}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function renderStatsSection(statsList, isAr) {
+  const groupsMap = new Map();
+  for (const st of statsList) {
+    const grp = st.group || 'General';
+    if (!groupsMap.has(grp)) groupsMap.set(grp, []);
+    groupsMap.get(grp).push(st);
+  }
+
+  const hasMultipleGroups = groupsMap.size > 1 && !groupsMap.has('General');
+
+  if (!hasMultipleGroups) {
+    return (
+      <div className="rounded-2xl border border-white/5 bg-[#14181B] p-3 sm:p-5 space-y-4">
+        {statsList.map((st) => renderSingleStatRow(st, isAr))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {Array.from(groupsMap.entries()).map(([groupName, groupStats]) => {
+        const groupLabel = isAr ? (GROUP_TRANSLATIONS_AR[groupName.toLowerCase()] || groupName) : groupName;
+        return (
+          <div key={groupName} className="rounded-2xl border border-white/5 bg-[#14181B] p-3 sm:p-5 space-y-3">
+            <h5 className="text-xs font-black uppercase tracking-wider text-gray-400 border-b border-white/5 pb-2">
+              {groupLabel}
+            </h5>
+            <div className="space-y-3">
+              {groupStats.map((st) => renderSingleStatRow(st, isAr))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // Generate realistic match statistics based on actual score and match state
 function generateMockStats(match) {
   const hScore = Number(match.home_score ?? 1);
@@ -306,37 +490,41 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
       }
     : null;
 
-  // Resolve Stats (Real from Flashscore if available, else generated realistic mock)
+  // Resolve Stats (Official FotMob stats from backend, or realistic fallback)
   let parsedRealStats = null;
-  if (realDetails?.match_stats) {
-    if (Array.isArray(realDetails.match_stats)) {
-      parsedRealStats = realDetails.match_stats;
-    } else if (typeof realDetails.match_stats === 'string') {
+  const rawStatsCandidate = realDetails?.match_stats || match?.match_stats;
+  if (rawStatsCandidate) {
+    if (Array.isArray(rawStatsCandidate)) {
+      parsedRealStats = rawStatsCandidate;
+    } else if (typeof rawStatsCandidate === 'string') {
       try {
-        parsedRealStats = JSON.parse(realDetails.match_stats);
+        parsedRealStats = JSON.parse(rawStatsCandidate);
       } catch (e) {
         parsedRealStats = null;
       }
     }
   }
 
-  const statsList =
-    parsedRealStats && parsedRealStats.length > 0
-      ? parsedRealStats.map((st, idx) => {
-          const homeVal = parseFloat(String(st.home || '').replace('%', '')) || 0;
-          const awayVal = parseFloat(String(st.away || '').replace('%', '')) || 0;
-          return {
-            key: `real_stat_${idx}`,
-            labelEn: st.name || 'Stat',
-            labelAr: st.name || 'إحصائية',
-            home: String(st.home ?? 0),
-            away: String(st.away ?? 0),
-            homeVal,
-            awayVal,
-            reverseBetter: ['fouls', 'yellow', 'red', 'offsides'].some((k) => (st.name || '').toLowerCase().includes(k))
-          };
-        })
-      : generateMockStats(match);
+  const hasRealStats = Array.isArray(parsedRealStats) && parsedRealStats.length > 0;
+
+  const statsList = hasRealStats
+    ? parsedRealStats.map((st, idx) => {
+        const homeVal = typeof st.homeVal === 'number' ? st.homeVal : (parseFloat(String(st.home || '').replace('%', '').trim()) || 0);
+        const awayVal = typeof st.awayVal === 'number' ? st.awayVal : (parseFloat(String(st.away || '').replace('%', '').trim()) || 0);
+        const name = st.name || st.title || 'Stat';
+        return {
+          key: st.key || `real_stat_${idx}`,
+          labelEn: name,
+          labelAr: getStatArabicLabel(name),
+          home: String(st.home ?? 0),
+          away: String(st.away ?? 0),
+          homeVal,
+          awayVal,
+          group: st.group || 'General',
+          reverseBetter: isStatReverseBetter(name) || isStatReverseBetter(st.key)
+        };
+      })
+    : (!loadingDetails && (isLive || finished) ? generateMockStats(match) : null);
 
   // Competition Logo
   const compLogo = LEAGUE_LOGOS[match.competition_code] || LEAGUE_LOGOS.TUN;
@@ -523,58 +711,50 @@ export default function MatchDetailsModal({ match, lang = 'ar', t = {}, liveTime
           {/* TAB 1: MATCH STATS */}
           {activeTab === 'stats' && (
             <div className="space-y-4">
-              {/* Category Legend */}
-              <div className="flex items-center justify-between text-xs font-bold text-gray-400 px-2">
-                <span className="flex items-center gap-1.5 text-emerald-400">
-                  <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
-                  {match.home_team}
-                </span>
-                <span className="text-gray-500">{isAr ? 'مقارنة الأداء' : 'Head-to-Head Comparison'}</span>
-                <span className="flex items-center gap-1.5 text-amber-400">
-                  {match.away_team}
-                  <span className="h-2.5 w-2.5 rounded-full bg-amber-500" />
-                </span>
-              </div>
+              {loadingDetails ? (
+                <div className="flex flex-col items-center justify-center p-12 text-center rounded-3xl border border-white/10 bg-[#14181B] shadow-xl my-4 space-y-3">
+                  <div className="h-10 w-10 animate-spin rounded-full border-3 border-[#53FC18] border-t-transparent" />
+                  <h4 className="text-sm font-black text-white">
+                    {isAr ? 'جاري جلب إحصائيات المباراة الحقيقية...' : 'Loading official match stats...'}
+                  </h4>
+                </div>
+              ) : !statsList || statsList.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-16 px-6 text-center rounded-3xl border border-white/10 bg-[#14181B] shadow-2xl my-2 space-y-4">
+                  <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-white/5 border border-white/10 text-4xl shadow-inner">
+                    📊
+                  </div>
+                  <div className="space-y-1.5 max-w-sm">
+                    <h4 className="text-base sm:text-lg font-black text-white">
+                      {isAr ? '📊 إحصائيات المباراة غير متوفرة بعد' : '📊 Match stats not available yet'}
+                    </h4>
+                    <p className="text-xs text-gray-400">
+                      {isAr
+                        ? 'يتم تحديث إحصائيات المباراة تلقائياً وبشكل حي فور انطلاق صافرة البداية.'
+                        : 'Official statistics update automatically in real-time during and after the match.'}
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {/* Category Legend */}
+                  <div className="flex items-center justify-between text-xs font-bold text-gray-400 px-2">
+                    <span className="flex items-center gap-1.5 text-emerald-400 font-extrabold">
+                      <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 shadow-sm shadow-emerald-500/50" />
+                      {match.home_team}
+                    </span>
+                    <span className="text-gray-500 text-[11px] uppercase tracking-wider font-semibold">
+                      {isAr ? 'مقارنة الأداء الحي' : 'Head-to-Head Comparison'}
+                    </span>
+                    <span className="flex items-center gap-1.5 text-amber-400 font-extrabold">
+                      {match.away_team}
+                      <span className="h-2.5 w-2.5 rounded-full bg-amber-500 shadow-sm shadow-amber-500/50" />
+                    </span>
+                  </div>
 
-              {/* Stats Progress Bars */}
-              <div className="rounded-2xl border border-white/5 bg-[#14181B] p-3 sm:p-5 space-y-4">
-                {statsList.map((st) => {
-                  const total = (st.homeVal || 0) + (st.awayVal || 0);
-                  const hPct = total > 0 ? Math.round(((st.homeVal || 0) / total) * 100) : 50;
-                  const aPct = 100 - hPct;
-                  const homeIsBetter = st.reverseBetter ? st.homeVal < st.awayVal : st.homeVal > st.awayVal;
-                  const awayIsBetter = st.reverseBetter ? st.awayVal < st.homeVal : st.awayVal > st.homeVal;
-
-                  return (
-                    <div key={st.key} className="space-y-1.5">
-                      {/* Metric Numbers & Label */}
-                      <div className="flex items-center justify-between text-xs sm:text-sm">
-                        <span className={`font-mono font-black ${homeIsBetter ? 'text-emerald-400' : 'text-gray-300'}`}>
-                          {st.home}
-                        </span>
-                        <span className="text-xs font-extrabold text-gray-400 text-center truncate px-2">
-                          {isAr ? st.labelAr : st.labelEn}
-                        </span>
-                        <span className={`font-mono font-black ${awayIsBetter ? 'text-amber-400' : 'text-gray-300'}`}>
-                          {st.away}
-                        </span>
-                      </div>
-
-                      {/* Dual Progress Bar */}
-                      <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-[#090C0E] border border-white/5 p-0.5">
-                        <div
-                          className="h-full rounded-l-full bg-gradient-to-r from-emerald-600 to-emerald-400 transition-all duration-500"
-                          style={{ width: `${hPct}%` }}
-                        />
-                        <div
-                          className="h-full rounded-r-full bg-gradient-to-r from-amber-400 to-amber-600 transition-all duration-500"
-                          style={{ width: `${aPct}%` }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+                  {/* Grouped or Single Stats Cards with Dual-Color Progress Bars */}
+                  {renderStatsSection(statsList, isAr)}
+                </>
+              )}
             </div>
           )}
 

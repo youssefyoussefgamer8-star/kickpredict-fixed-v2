@@ -1047,28 +1047,31 @@ app.get(
     const matchId = row.id;
     const rawFlashId = row.flashscore_id || (row.external_id && bigIntToFlashscoreId ? bigIntToFlashscoreId(row.external_id) : null);
     const hasLineupsInDB = hasUsableLineups(row.match_lineups);
-    console.log(`[API /details] Match resolved: id=${matchId}, external_id=${row.external_id}, flashscore_id=${rawFlashId}, status=${row.status}, hasLineupsInDB=${hasLineupsInDB}`);
+    const hasStatsInDB = Boolean(row.match_stats && (Array.isArray(row.match_stats) ? row.match_stats.length > 0 : Object.keys(row.match_stats).length > 0));
+    console.log(`[API /details] Match resolved: id=${matchId}, external_id=${row.external_id}, flashscore_id=${rawFlashId}, status=${row.status}, hasLineupsInDB=${hasLineupsInDB}, hasStatsInDB=${hasStatsInDB}`);
 
     const isFinished = row.status === 'FINISHED' || row.status === 'FT';
     const isLive = row.status === 'IN_PLAY' || row.status === 'PAUSED' || row.status === '1H' || row.status === '2H' || row.status === 'HT';
     const kickoffTime = row.utc_date ? new Date(row.utc_date).getTime() : NaN;
     const kickoffNearOrPast = Number.isFinite(kickoffTime) && (Date.now() >= kickoffTime - 75 * 60 * 1000);
 
-    // CRITICAL: If lineups are missing or incomplete in DB, ALWAYS force fetch regardless of FT/FINISHED status!
+    // CRITICAL: If lineups or stats are missing in DB, ALWAYS force fetch regardless of FT/FINISHED status!
     const needsLineups = !hasLineupsInDB;
-    const needsLiveMatchUpdate = isLive || !isFinished || kickoffNearOrPast;
+    const needsStats = !hasStatsInDB && kickoffNearOrPast;
+    const needsLiveMatchUpdate = isLive || !isFinished || kickoffNearOrPast || needsStats;
 
-    console.log(`[API /details] Match ${matchId} flags: needsLineups=${needsLineups}, needsLiveMatchUpdate=${needsLiveMatchUpdate}, isLive=${isLive}, isFinished=${isFinished}`);
+    console.log(`[API /details] Match ${matchId} flags: needsLineups=${needsLineups}, needsStats=${needsStats}, needsLiveMatchUpdate=${needsLiveMatchUpdate}, isLive=${isLive}, isFinished=${isFinished}`);
 
     let bestLineups = hasLineupsInDB ? row.match_lineups : null;
     let liveDetails = null;
+    let fotmobStats = null;
 
     let liveStatus = row.status;
     let liveHomeScore = row.home_score;
     let liveAwayScore = row.away_score;
 
     if (needsLineups || needsLiveMatchUpdate) {
-      // 1. FotMob is the sole and primary source for authentic match lineups and live scores
+      // 1. FotMob is the sole and primary source for authentic match lineups, match stats, and live scores
       if (typeof fetchFotmobLineup === 'function') {
         try {
           console.log(`[API /details] Attempting FotMob lookup for ${row.home_team} vs ${row.away_team} (matchId: ${matchId}, date: ${row.utc_date})...`);
@@ -1076,6 +1079,10 @@ app.get(
           if (hasUsableLineups(fotmobLineup)) {
             bestLineups = fotmobLineup;
             console.log(`[API /details] FotMob lineups successfully retrieved for ${row.home_team} vs ${row.away_team} (${bestLineups.startingHome.length} home starters)`);
+          }
+          if (Array.isArray(fotmobLineup?.stats) && fotmobLineup.stats.length > 0) {
+            fotmobStats = fotmobLineup.stats;
+            console.log(`[API /details] FotMob stats successfully retrieved for ${row.home_team} vs ${row.away_team} (${fotmobStats.length} stats)`);
           }
           if (fotmobLineup?.scores && fotmobLineup.scores.home !== null && fotmobLineup.scores.away !== null) {
             liveHomeScore = fotmobLineup.scores.home;
@@ -1100,8 +1107,17 @@ app.get(
         }
       }
 
+      let liveStats = fotmobStats;
+      if (!liveStats && Array.isArray(liveDetails?.stats) && liveDetails.stats.length > 0) {
+        liveStats = liveDetails.stats;
+      }
+      if (!liveStats && row.match_stats) {
+        liveStats = row.match_stats;
+      }
+
       const hasNewlyFetchedLineups = hasUsableLineups(bestLineups) && !hasLineupsInDB;
-      const hasStats = Array.isArray(liveDetails?.stats) && liveDetails.stats.length > 0;
+      const hasNewlyFetchedStats = Array.isArray(liveStats) && liveStats.length > 0 && !hasStatsInDB;
+      const hasStats = Boolean(liveStats && (Array.isArray(liveStats) ? liveStats.length > 0 : true));
       const hasIncidents = Array.isArray(liveDetails?.incidents) && liveDetails.incidents.length > 0;
 
       if (liveDetails?.scores && liveDetails.scores.home !== null && liveDetails.scores.away !== null) {
@@ -1114,8 +1130,8 @@ app.get(
       const scoreOrStatusChanged = liveHomeScore !== row.home_score || liveAwayScore !== row.away_score || liveStatus !== row.status;
 
       // 3. Immediate Database Persistence
-      // If we obtained usable lineups for this match (finished or in play), OR scores/status changed, update PostgreSQL immediately
-      if (hasNewlyFetchedLineups || (hasUsableLineups(bestLineups) && isLive) || scoreOrStatusChanged) {
+      // If we obtained usable lineups or stats for this match (finished or in play), OR scores/status changed, update PostgreSQL immediately
+      if (hasNewlyFetchedLineups || hasNewlyFetchedStats || (hasUsableLineups(bestLineups) && isLive) || (hasStats && isLive) || scoreOrStatusChanged) {
         try {
           await pool.query(
             `UPDATE matches
@@ -1131,7 +1147,7 @@ app.get(
             [
               hasUsableLineups(bestLineups) ? JSON.stringify(bestLineups) : null,
               rawFlashId,
-              hasStats ? JSON.stringify(liveDetails.stats) : null,
+              hasStats ? JSON.stringify(liveStats) : null,
               hasIncidents ? JSON.stringify(liveDetails.incidents) : null,
               liveStatus,
               liveHomeScore,
@@ -1140,12 +1156,12 @@ app.get(
             ]
           );
           if (hasUsableLineups(bestLineups)) row.match_lineups = bestLineups;
-          if (hasStats) row.match_stats = liveDetails.stats;
+          if (hasStats) row.match_stats = liveStats;
           if (hasIncidents) row.match_incidents = liveDetails.incidents;
           row.status = liveStatus;
           row.home_score = liveHomeScore;
           row.away_score = liveAwayScore;
-          console.log(`[API /details] Successfully saved FotMob details to DB for match ${matchId} (score: ${liveHomeScore}-${liveAwayScore}, status: ${liveStatus})`);
+          console.log(`[API /details] Successfully saved FotMob details to DB for match ${matchId} (score: ${liveHomeScore}-${liveAwayScore}, status: ${liveStatus}, stats: ${hasStats ? liveStats.length : 0})`);
         } catch (dbErr) {
           console.error(`[API /details] Database update error for match ${matchId}:`, dbErr.message);
         }
@@ -1163,7 +1179,7 @@ app.get(
              WHERE id = $7`,
             [
               rawFlashId,
-              hasStats ? JSON.stringify(liveDetails.stats) : null,
+              hasStats ? JSON.stringify(liveStats) : null,
               hasIncidents ? JSON.stringify(liveDetails.incidents) : null,
               liveStatus,
               liveHomeScore,
@@ -1171,7 +1187,7 @@ app.get(
               matchId
             ]
           );
-          if (hasStats) row.match_stats = liveDetails.stats;
+          if (hasStats) row.match_stats = liveStats;
           if (hasIncidents) row.match_incidents = liveDetails.incidents;
           row.status = liveStatus;
           row.home_score = liveHomeScore;
@@ -1215,7 +1231,14 @@ app.get(
       row.awayRoster = aRoster;
     }
 
-    console.log(`[API /details] Returning response for match ${matchId}: lineups=${Boolean(row.lineups || row.match_lineups)}, startingHome=${row.homeRoster?.starting?.length || 0}, startingAway=${row.awayRoster?.starting?.length || 0}`);
+    if (row.match_stats && typeof row.match_stats === 'string') {
+      try { row.match_stats = JSON.parse(row.match_stats); } catch {}
+    }
+    if (!row.match_stats && lineupsPayload?.stats && Array.isArray(lineupsPayload.stats) && lineupsPayload.stats.length > 0) {
+      row.match_stats = lineupsPayload.stats;
+    }
+
+    console.log(`[API /details] Returning response for match ${matchId}: lineups=${Boolean(row.lineups || row.match_lineups)}, startingHome=${row.homeRoster?.starting?.length || 0}, startingAway=${row.awayRoster?.starting?.length || 0}, stats=${Array.isArray(row.match_stats) ? row.match_stats.length : Boolean(row.match_stats)}`);
     res.json(row);
   })
 );

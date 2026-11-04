@@ -181,21 +181,80 @@ function extractPlayerEventsMap(matchFactsEvents) {
 }
 
 /**
+ * Extracts and normalizes match statistics from FotMob matchDetails payload
+ * Looks into content.stats.Periods.All.stats or content.stats
+ */
+function parseFotmobStats(data) {
+  if (!data || !data.content) return [];
+  const groups = data.content?.stats?.Periods?.All?.stats || data.content?.stats || [];
+  if (!Array.isArray(groups)) return [];
+
+  const extracted = [];
+  const seenTitles = new Set();
+
+  for (const group of groups) {
+    const statItems = Array.isArray(group?.stats) ? group.stats : [];
+    for (const item of statItems) {
+      if (!item || !item.title) continue;
+      if (!Array.isArray(item.stats) || item.stats.length < 2) continue;
+
+      const rawHome = item.stats[0];
+      const rawAway = item.stats[1];
+      if (rawHome === null || rawHome === undefined || rawAway === null || rawAway === undefined) continue;
+
+      const title = item.title.trim();
+      const titleKey = title.toLowerCase();
+      if (seenTitles.has(titleKey)) continue;
+      seenTitles.add(titleKey);
+
+      // Parse numerical values for comparison bars
+      let homeNum = 0;
+      let awayNum = 0;
+
+      if (item.rawStats && item.rawStats[0]?.value != null && item.rawStats[1]?.value != null) {
+        homeNum = parseFloat(item.rawStats[0].value) || 0;
+        awayNum = parseFloat(item.rawStats[1].value) || 0;
+      } else {
+        homeNum = parseFloat(String(rawHome).replace('%', '').trim()) || 0;
+        awayNum = parseFloat(String(rawAway).replace('%', '').trim()) || 0;
+      }
+
+      // Check if stat is percentage
+      const isPercent = String(rawHome).includes('%') || String(rawAway).includes('%') || item.key === 'BallPossesion';
+      const homeStr = isPercent && !String(rawHome).includes('%') ? `${rawHome}%` : String(rawHome);
+      const awayStr = isPercent && !String(rawAway).includes('%') ? `${rawAway}%` : String(rawAway);
+
+      extracted.push({
+        name: title,
+        key: item.key || titleKey,
+        home: homeStr,
+        away: awayStr,
+        homeVal: homeNum,
+        awayVal: awayNum,
+        group: group.title || 'General'
+      });
+    }
+  }
+
+  return extracted;
+}
+
+/**
  * Parses raw FotMob matchDetails response into KickPredict unified roster contract
  */
 function parseFotmobLineup(data) {
   if (!data || typeof data !== 'object') return null;
 
+  const stats = parseFotmobStats(data);
   const lineup = data.content?.lineup || data.lineup;
-  if (!lineup || typeof lineup !== 'object') return null;
 
-  const homeTeam = lineup.homeTeam;
-  const awayTeam = lineup.awayTeam;
+  const homeTeam = lineup?.homeTeam;
+  const awayTeam = lineup?.awayTeam;
 
   const rawHomeStarters = Array.isArray(homeTeam?.starters) ? homeTeam.starters : [];
   const rawAwayStarters = Array.isArray(awayTeam?.starters) ? awayTeam.starters : [];
 
-  if (rawHomeStarters.length === 0 || rawAwayStarters.length === 0) {
+  if (rawHomeStarters.length === 0 && stats.length === 0) {
     return null;
   }
 
@@ -324,7 +383,8 @@ function parseFotmobLineup(data) {
       away: awayScore
     },
     status: isFinished ? 'FINISHED' : (isCancelled ? 'CANCELLED' : (isPaused ? 'PAUSED' : (isLive ? 'IN_PLAY' : null))),
-    liveClock
+    liveClock,
+    stats
   };
 }
 
@@ -443,8 +503,8 @@ async function fetchFotmobLineup(homeTeam, awayTeam, matchDate, matchId = null, 
         const data = await safeParseJsonResponse(res);
         if (!data) continue;
         const parsed = parseFotmobLineup(data);
-        if (parsed && parsed.startingHome?.length > 0) {
-          console.log(`[FotMob] Lineups successfully parsed for ${targetMatchId} (${parsed.startingHome.length} home starters)`);
+        if (parsed && (parsed.startingHome?.length > 0 || (Array.isArray(parsed.stats) && parsed.stats.length > 0))) {
+          console.log(`[FotMob] Details successfully parsed for ${targetMatchId} (${parsed.startingHome?.length || 0} home starters, ${parsed.stats?.length || 0} stats)`);
           return parsed;
         }
       }
@@ -477,7 +537,7 @@ async function smartLivePollingFotmob(
     // 1. Local Database Gate: Find matches needing live polling (including early lineups 75m before kickoff)
     const { rows: activeMatches } = await pool.query(
       `SELECT id, external_id, fotmob_id, flashscore_id, competition_code, home_team, away_team, utc_date, status, home_score, away_score,
-              home_ht, away_ht, points_calculated, match_lineups
+              home_ht, away_ht, points_calculated, match_lineups, match_stats
        FROM matches
        WHERE (
             status NOT IN ('FINISHED', 'CANCELLED', 'POSTPONED')
@@ -654,25 +714,39 @@ async function smartLivePollingFotmob(
           }
         }
 
-        // Check if early official lineups can be captured (within 75 mins of kickoff, live, or finished)
+        // Check if early official lineups or stats can be captured (within 75 mins of kickoff, live, or finished)
         const hasLineupsInDB = dbMatch.match_lineups && (
           (Array.isArray(dbMatch.match_lineups?.startingHome) && dbMatch.match_lineups.startingHome.length >= 7) ||
           (Array.isArray(dbMatch.match_lineups?.homeRoster?.starting) && dbMatch.match_lineups.homeRoster.starting.length >= 7)
         );
+        const hasStatsInDB = Array.isArray(dbMatch.match_stats) && dbMatch.match_stats.length > 0;
         const kickoffNear = dbMatch.utc_date && (new Date(dbMatch.utc_date).getTime() - Date.now() <= 75 * 60 * 1000);
 
-        if (!hasLineupsInDB && (kickoffNear || isOngoing || isFin)) {
+        if ((!hasLineupsInDB || !hasStatsInDB) && (kickoffNear || isOngoing || isFin)) {
           try {
-            const earlyLineup = await fetchFotmobLineup(dbMatch.home_team, dbMatch.away_team, dbMatch.utc_date, fm.id, { fetcher });
-            if (earlyLineup && Array.isArray(earlyLineup.startingHome) && earlyLineup.startingHome.length >= 7) {
-              await pool.query(
-                `UPDATE matches SET match_lineups = $1::jsonb, updated_at = NOW() WHERE id = $2`,
-                [JSON.stringify(earlyLineup), dbMatch.id]
-              );
-              console.log(`[FotMob Live Polling] Captured and saved early official lineups for match ${dbMatch.id} (${dbMatch.home_team} vs ${dbMatch.away_team})`);
+            const details = await fetchFotmobLineup(dbMatch.home_team, dbMatch.away_team, dbMatch.utc_date, fm.id, { fetcher });
+            if (details) {
+              const hasUsableStarting = Array.isArray(details.startingHome) && details.startingHome.length >= 7;
+              const hasUsableStats = Array.isArray(details.stats) && details.stats.length > 0;
+
+              if (hasUsableStarting || hasUsableStats) {
+                await pool.query(
+                  `UPDATE matches
+                   SET match_lineups = COALESCE($1::jsonb, match_lineups),
+                       match_stats = COALESCE($2::jsonb, match_stats),
+                       updated_at = NOW()
+                   WHERE id = $3`,
+                  [
+                    hasUsableStarting ? JSON.stringify(details) : null,
+                    hasUsableStats ? JSON.stringify(details.stats) : null,
+                    dbMatch.id
+                  ]
+                );
+                console.log(`[FotMob Live Polling] Saved details to DB for match ${dbMatch.id} (lineups: ${hasUsableStarting}, stats: ${hasUsableStats})`);
+              }
             }
           } catch (lineupErr) {
-            console.warn(`[FotMob Live Polling] Early lineup check error for match ${dbMatch.id}:`, lineupErr.message);
+            console.warn(`[FotMob Live Polling] Details sync error for match ${dbMatch.id}:`, lineupErr.message);
           }
         }
       } catch (matchErr) {
@@ -709,5 +783,6 @@ module.exports = {
   parseFotmobLineup,
   findFotmobMatchId,
   fetchFotmobLineup,
+  parseFotmobStats,
   smartLivePollingFotmob
 };
