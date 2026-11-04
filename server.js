@@ -1051,7 +1051,8 @@ app.get(
 
     const isFinished = row.status === 'FINISHED' || row.status === 'FT';
     const isLive = row.status === 'IN_PLAY' || row.status === 'PAUSED' || row.status === '1H' || row.status === '2H' || row.status === 'HT';
-    const kickoffNearOrPast = row.utc_date && (new Date(row.utc_date).getTime() - Date.now() <= 60 * 60 * 1000);
+    const kickoffTime = row.utc_date ? new Date(row.utc_date).getTime() : NaN;
+    const kickoffNearOrPast = Number.isFinite(kickoffTime) && (Date.now() >= kickoffTime - 75 * 60 * 1000);
 
     // CRITICAL: If lineups are missing or incomplete in DB, ALWAYS force fetch regardless of FT/FINISHED status!
     const needsLineups = !hasLineupsInDB;

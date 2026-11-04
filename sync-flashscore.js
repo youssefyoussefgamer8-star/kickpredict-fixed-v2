@@ -1037,7 +1037,7 @@ async function smartLivePolling(
        WHERE status IN ('IN_PLAY', 'PAUSED')
           OR (
             status IN ('TIMED', 'SCHEDULED')
-            AND utc_date <= NOW() + INTERVAL '30 minutes'
+            AND utc_date <= NOW() + INTERVAL '75 minutes'
             AND utc_date >= NOW() - INTERVAL '180 minutes'
           )
        ORDER BY utc_date ASC`

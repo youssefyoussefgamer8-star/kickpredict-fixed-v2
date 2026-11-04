@@ -195,5 +195,85 @@ console.log('✓ Mock lineup parsing and events mapping verified');
   assert.strictEqual(updatedQueries[0].params[2], 'FINISHED', 'Status should update to FINISHED');
   console.log('✓ smartLivePollingFotmob successfully detected live score & status and updated database');
 
+  // 6. Test 75-minute early radar window for upcoming match lineup capture
+  console.log('\nTesting 75-minute early lineup capture radar window...');
+  const upcomingMatch = {
+    id: 202,
+    home_team: 'Arsenal',
+    away_team: 'Chelsea',
+    status: 'TIMED',
+    utc_date: new Date(Date.now() + 50 * 60 * 1000).toISOString(), // 50 mins before kickoff
+    home_score: null,
+    away_score: null,
+    match_lineups: null
+  };
+
+  const earlyQueries = [];
+  const upcomingPool = {
+    query: async (sql, params) => {
+      if (sql.includes('SELECT id, external_id')) {
+        return { rows: [upcomingMatch] };
+      }
+      if (sql.includes('UPDATE matches')) {
+        earlyQueries.push({ sql, params });
+        return { rowCount: 1 };
+      }
+      return { rows: [] };
+    }
+  };
+
+  await smartLivePollingFotmob(upcomingPool, {
+    fetcher: async (url) => {
+      if (url.includes('matchDetails')) {
+        return {
+          ok: true,
+          json: async () => ({
+            content: {
+              lineup: {
+                lineupType: 'confirmed',
+                homeTeam: {
+                  name: 'Arsenal',
+                  formation: '4-3-3',
+                  starters: Array(11).fill(0).map((_, i) => ({ id: 500 + i, name: `Gunner ${i + 1}`, shirtNumber: `${i + 1}` })),
+                  subs: []
+                },
+                awayTeam: {
+                  name: 'Chelsea',
+                  formation: '4-2-3-1',
+                  starters: Array(11).fill(0).map((_, i) => ({ id: 600 + i, name: `Blue ${i + 1}`, shirtNumber: `${i + 1}` })),
+                  subs: []
+                }
+              }
+            }
+          })
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          leagues: [
+            {
+              matches: [
+                {
+                  id: 999901,
+                  home: { name: 'Arsenal' },
+                  away: { name: 'Chelsea' },
+                  status: { started: false, finished: false }
+                }
+              ]
+            }
+          ]
+        })
+      };
+    }
+  });
+
+  const lineupUpdate = earlyQueries.find(q => q.sql.includes('match_lineups = $1::jsonb'));
+  assert.ok(lineupUpdate, 'Early lineup must be persisted to PostgreSQL within 75m window');
+  const savedEarly = JSON.parse(lineupUpdate.params[0]);
+  assert.strictEqual(savedEarly.startingHome.length, 11, 'Should save 11 home starters');
+  assert.strictEqual(savedEarly.startingAway.length, 11, 'Should save 11 away starters');
+  console.log('✓ 75-minute early lineup radar window verified: official lineups captured and persisted before kickoff');
+
   console.log('\nAll FotMob module tests passed 100%!');
 })();

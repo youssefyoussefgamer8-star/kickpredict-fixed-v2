@@ -474,14 +474,14 @@ async function smartLivePollingFotmob(
   fotmobLivePollingRunning = true;
 
   try {
-    // 1. Local Database Gate: Find matches needing live polling
+    // 1. Local Database Gate: Find matches needing live polling (including early lineups 75m before kickoff)
     const { rows: activeMatches } = await pool.query(
       `SELECT id, external_id, fotmob_id, flashscore_id, competition_code, home_team, away_team, utc_date, status, home_score, away_score,
-              home_ht, away_ht, points_calculated
+              home_ht, away_ht, points_calculated, match_lineups
        FROM matches
        WHERE (
             status NOT IN ('FINISHED', 'CANCELLED', 'POSTPONED')
-            AND utc_date <= NOW() + INTERVAL '30 minutes'
+            AND utc_date <= NOW() + INTERVAL '75 minutes'
             AND utc_date >= NOW() - INTERVAL '14 days'
           )
           OR (
@@ -651,6 +651,28 @@ async function smartLivePollingFotmob(
             } catch (reconErr) {
               console.error(`[FotMob Live Polling] Score reconciliation error for match ${dbMatch.id}:`, reconErr.message);
             }
+          }
+        }
+
+        // Check if early official lineups can be captured (within 75 mins of kickoff, live, or finished)
+        const hasLineupsInDB = dbMatch.match_lineups && (
+          (Array.isArray(dbMatch.match_lineups?.startingHome) && dbMatch.match_lineups.startingHome.length >= 7) ||
+          (Array.isArray(dbMatch.match_lineups?.homeRoster?.starting) && dbMatch.match_lineups.homeRoster.starting.length >= 7)
+        );
+        const kickoffNear = dbMatch.utc_date && (new Date(dbMatch.utc_date).getTime() - Date.now() <= 75 * 60 * 1000);
+
+        if (!hasLineupsInDB && (kickoffNear || isOngoing || isFin)) {
+          try {
+            const earlyLineup = await fetchFotmobLineup(dbMatch.home_team, dbMatch.away_team, dbMatch.utc_date, fm.id, { fetcher });
+            if (earlyLineup && Array.isArray(earlyLineup.startingHome) && earlyLineup.startingHome.length >= 7) {
+              await pool.query(
+                `UPDATE matches SET match_lineups = $1::jsonb, updated_at = NOW() WHERE id = $2`,
+                [JSON.stringify(earlyLineup), dbMatch.id]
+              );
+              console.log(`[FotMob Live Polling] Captured and saved early official lineups for match ${dbMatch.id} (${dbMatch.home_team} vs ${dbMatch.away_team})`);
+            }
+          } catch (lineupErr) {
+            console.warn(`[FotMob Live Polling] Early lineup check error for match ${dbMatch.id}:`, lineupErr.message);
           }
         }
       } catch (matchErr) {
