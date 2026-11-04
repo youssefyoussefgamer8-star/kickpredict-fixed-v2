@@ -6,7 +6,8 @@ const {
   mapFotmobPosition,
   parseFotmobLineup,
   findFotmobMatchId,
-  fetchFotmobLineup
+  fetchFotmobLineup,
+  smartLivePollingFotmob
 } = require('./sync-fotmob');
 
 console.log('--- Testing FotMob Module ---');
@@ -113,8 +114,79 @@ console.log('✓ Mock lineup parsing and events mapping verified');
   assert.strictEqual(realLineup.startingAway.length, 11, 'Should have 11 away starters');
   assert.ok(realLineup.managerHome, 'Home manager must be present');
   assert.ok(realLineup.managerAway, 'Away manager must be present');
+  assert.strictEqual(realLineup.scores?.home, 3, 'Barcelona score must be 3');
+  assert.strictEqual(realLineup.scores?.away, 0, 'Aston Villa score must be 0');
+  assert.strictEqual(realLineup.status, 'FINISHED', 'Status must be FINISHED');
   console.log(`✓ Real FotMob lineup fetched successfully! (${realLineup.startingHome.length} home, ${realLineup.startingAway.length} away players)`);
   console.log(`  Home Manager: ${realLineup.managerHome} | Away Manager: ${realLineup.managerAway}`);
+  console.log(`  Real Score Extracted: ${realLineup.scores.home} - ${realLineup.scores.away} (Status: ${realLineup.status})`);
   console.log(`  Sample Starters: ${realLineup.startingHome[0].name} (#${realLineup.startingHome[0].num}), ${realLineup.startingAway[0].name} (#${realLineup.startingAway[0].num})`);
+
+  // 5. Test smartLivePollingFotmob Gate & Updates
+  console.log('\nTesting smartLivePollingFotmob...');
+  let networkCalls = 0;
+  const emptyPool = {
+    query: async () => ({ rows: [] })
+  };
+  await smartLivePollingFotmob(emptyPool, {
+    fetcher: async () => {
+      networkCalls++;
+      return { ok: true, json: async () => ({ leagues: [] }) };
+    }
+  });
+  assert.strictEqual(networkCalls, 0, 'Gate condition: zero network calls when no active matches in DB');
+  console.log('✓ smartLivePollingFotmob gate passed (0 calls when idle)');
+
+  // Active match test
+  const activeMatch = {
+    id: 101,
+    home_team: 'Barcelona',
+    away_team: 'Aston Villa',
+    status: 'IN_PLAY',
+    utc_date: '2026-11-03T20:00:00.000Z',
+    home_score: 0,
+    away_score: 0
+  };
+
+  const updatedQueries = [];
+  const livePool = {
+    query: async (sql, params) => {
+      if (sql.includes('SELECT id, external_id')) {
+        return { rows: [activeMatch] };
+      }
+      if (sql.includes('UPDATE matches')) {
+        updatedQueries.push({ sql, params });
+        return { rowCount: 1 };
+      }
+      return { rows: [] };
+    }
+  };
+
+  await smartLivePollingFotmob(livePool, {
+    fetcher: async () => ({
+      ok: true,
+      json: async () => ({
+        leagues: [
+          {
+            matches: [
+              {
+                id: 6106263,
+                home: { name: 'Barcelona', score: 3 },
+                away: { name: 'Aston Villa', score: 0 },
+                status: { finished: true, reason: { short: 'FT' } }
+              }
+            ]
+          }
+        ]
+      })
+    })
+  });
+
+  assert.strictEqual(updatedQueries.length, 1, 'Match record must be updated');
+  assert.strictEqual(updatedQueries[0].params[0], 3, 'Home score should update to 3');
+  assert.strictEqual(updatedQueries[0].params[1], 0, 'Away score should update to 0');
+  assert.strictEqual(updatedQueries[0].params[2], 'FINISHED', 'Status should update to FINISHED');
+  console.log('✓ smartLivePollingFotmob successfully detected live score & status and updated database');
+
   console.log('\nAll FotMob module tests passed 100%!');
 })();

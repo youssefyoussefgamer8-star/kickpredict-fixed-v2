@@ -246,6 +246,16 @@ function parseFotmobLineup(data) {
     subs: subsAway
   };
 
+  const headerTeams = Array.isArray(data.header?.teams) ? data.header.teams : [];
+  const homeScore = headerTeams[0]?.score != null ? Number(headerTeams[0].score) : null;
+  const awayScore = headerTeams[1]?.score != null ? Number(headerTeams[1].score) : null;
+
+  const headerStatus = data.header?.status;
+  const isFinished = Boolean(headerStatus?.finished || headerStatus?.reason?.short === 'FT');
+  const isPaused = Boolean(headerStatus?.reason?.short === 'HT' || headerStatus?.reason?.shortKey === 'halftime_short');
+  const isLive = Boolean(headerStatus?.started && !headerStatus?.finished);
+  const liveClock = headerStatus?.liveTime?.short || headerStatus?.reason?.short || null;
+
   return {
     source: 'fotmob',
     confirmed: Boolean(lineup.lineupType === 'confirmed' || startingHome.length >= 7),
@@ -258,8 +268,37 @@ function parseFotmobLineup(data) {
     subsHome,
     subsAway,
     homeRoster,
-    awayRoster
+    awayRoster,
+    scores: {
+      home: homeScore,
+      away: awayScore
+    },
+    status: isFinished ? 'FINISHED' : (isPaused ? 'PAUSED' : (isLive ? 'IN_PLAY' : null)),
+    liveClock
   };
+}
+
+/**
+ * Safely parses response as JSON supporting both res.json() and res.text()
+ */
+async function safeParseJsonResponse(res) {
+  if (!res) return null;
+  if (typeof res.json === 'function') {
+    try {
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+  if (typeof res.text === 'function') {
+    try {
+      const text = await res.text();
+      return JSON.parse(text);
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 /**
@@ -294,8 +333,8 @@ async function findFotmobMatchId(homeTeam, awayTeam, matchDate, { fetcher = fetc
         });
 
         if (res.ok) {
-          const data = await res.json();
-          const leagues = Array.isArray(data.leagues) ? data.leagues : [];
+          const data = await safeParseJsonResponse(res);
+          const leagues = Array.isArray(data?.leagues) ? data.leagues : [];
 
           for (const league of leagues) {
             const matches = Array.isArray(league.matches) ? league.matches : [];
@@ -351,7 +390,8 @@ async function fetchFotmobLineup(homeTeam, awayTeam, matchDate, matchId = null, 
       });
 
       if (res.ok) {
-        const data = await res.json();
+        const data = await safeParseJsonResponse(res);
+        if (!data) continue;
         const parsed = parseFotmobLineup(data);
         if (parsed && parsed.startingHome?.length > 0) {
           console.log(`[FotMob] Lineups successfully parsed for ${targetMatchId} (${parsed.startingHome.length} home starters)`);
@@ -366,6 +406,193 @@ async function fetchFotmobLineup(homeTeam, awayTeam, matchDate, matchId = null, 
   return null;
 }
 
+let fotmobLivePollingRunning = false;
+
+/**
+ * Smart Live Polling via FotMob API:
+ * 1. Queries PostgreSQL for active matches ('IN_PLAY', 'PAUSED', 'LIVE') or matches scheduled around now.
+ * 2. Fetches https://www.fotmob.com/api/data/matches?date=YYYYMMDD (and /matches) for needed dates.
+ * 3. Matches fixtures by fotmob_id or fuzzy team names.
+ * 4. Updates home_score, away_score, status, and live_clock in PostgreSQL.
+ * 5. Triggers settlement and score corrections when a match finishes.
+ */
+async function smartLivePollingFotmob(
+  pool,
+  { settleFinishedMatches, reconcileScoreCorrections, fetcher = fetch } = {}
+) {
+  if (fotmobLivePollingRunning) return;
+  fotmobLivePollingRunning = true;
+
+  try {
+    // 1. Local Database Gate: Find matches needing live polling
+    const { rows: activeMatches } = await pool.query(
+      `SELECT id, external_id, fotmob_id, flashscore_id, competition_code, home_team, away_team, utc_date, status, home_score, away_score,
+              home_ht, away_ht, points_calculated
+       FROM matches
+       WHERE status IN ('IN_PLAY', 'PAUSED', 'LIVE', '1H', '2H', 'HT')
+          OR (
+            status IN ('TIMED', 'SCHEDULED')
+            AND utc_date <= NOW() + INTERVAL '30 minutes'
+            AND utc_date >= NOW() - INTERVAL '300 minutes'
+          )
+          OR (
+            status = 'FINISHED'
+            AND (home_score IS NULL OR away_score IS NULL OR points_calculated IS NOT TRUE)
+            AND utc_date >= NOW() - INTERVAL '24 hours'
+          )
+       ORDER BY utc_date ASC`
+    );
+
+    if (activeMatches.length === 0) {
+      if (typeof settleFinishedMatches === 'function') {
+        try {
+          await settleFinishedMatches();
+        } catch (settleErr) {
+          console.error('[FotMob Live Polling] Settlement error during idle check:', settleErr.message);
+        }
+      }
+      return;
+    }
+
+    console.log(`[FotMob Live Polling] Detected ${activeMatches.length} active/near matches. Fetching FotMob feeds...`);
+
+    // 2. Identify required dates in YYYYMMDD format
+    const toDateStr = (d) => new Date(d).toISOString().slice(0, 10).replace(/-/g, '');
+    const dateSet = new Set();
+    dateSet.add(toDateStr(new Date())); // Today
+
+    for (const m of activeMatches) {
+      if (m.utc_date) {
+        const d = new Date(m.utc_date);
+        if (!isNaN(d.getTime())) {
+          dateSet.add(toDateStr(d));
+          dateSet.add(toDateStr(new Date(d.getTime() - 24 * 60 * 60 * 1000)));
+          dateSet.add(toDateStr(new Date(d.getTime() + 24 * 60 * 60 * 1000)));
+        }
+      }
+    }
+
+    // 3. Fetch FotMob schedule for each unique date and collect all matches
+    const fotmobMatches = [];
+    for (const dStr of dateSet) {
+      const urls = [
+        `${FOTMOB_API_BASE}/data/matches?date=${dStr}`,
+        `${FOTMOB_API_BASE}/matches?date=${dStr}`
+      ];
+      for (const url of urls) {
+        try {
+          const res = await fetcher(url, {
+            headers: FOTMOB_HEADERS,
+            signal: AbortSignal.timeout(8000)
+          });
+          if (res.ok) {
+            const data = await safeParseJsonResponse(res);
+            const leagues = Array.isArray(data?.leagues) ? data.leagues : [];
+            for (const l of leagues) {
+              const ms = Array.isArray(l.matches) ? l.matches : [];
+              for (const m of ms) {
+                fotmobMatches.push(m);
+              }
+            }
+            break; // Stop after first working endpoint for this date
+          }
+        } catch (fetchErr) {
+          console.warn(`[FotMob Live Polling] Error fetching ${url}:`, fetchErr.message);
+        }
+      }
+    }
+
+    console.log(`[FotMob Live Polling] Gathered ${fotmobMatches.length} fixtures from FotMob.`);
+
+    // 4. Update each database match with real scores, status, and time
+    let updatedCount = 0;
+    const newlyFinishedMatches = [];
+
+    for (const dbMatch of activeMatches) {
+      try {
+        const fm = fotmobMatches.find((m) => {
+          if (dbMatch.fotmob_id && String(m.id) === String(dbMatch.fotmob_id)) return true;
+          const hName = m.home?.name || m.home?.shortName || '';
+          const aName = m.away?.name || m.away?.shortName || '';
+          return (
+            (teamsMatch(hName, dbMatch.home_team) && teamsMatch(aName, dbMatch.away_team)) ||
+            (teamsMatch(hName, dbMatch.away_team) && teamsMatch(aName, dbMatch.home_team))
+          );
+        });
+
+        if (!fm) continue;
+
+        // Extract scores
+        const homeScore = fm.home?.score != null ? Number(fm.home.score) : null;
+        const awayScore = fm.away?.score != null ? Number(fm.away.score) : null;
+
+        // Map status
+        let newStatus = dbMatch.status;
+        if (fm.status?.finished === true || fm.status?.reason?.short === 'FT') {
+          newStatus = 'FINISHED';
+        } else if (fm.status?.reason?.short === 'HT' || fm.status?.reason?.shortKey === 'halftime_short') {
+          newStatus = 'PAUSED';
+        } else if (fm.status?.ongoing === true || (fm.status?.started === true && !fm.status?.finished)) {
+          newStatus = 'IN_PLAY';
+        }
+
+        const scoreChanged =
+          (homeScore !== null && homeScore !== dbMatch.home_score) ||
+          (awayScore !== null && awayScore !== dbMatch.away_score);
+        const statusChanged = newStatus !== dbMatch.status;
+
+        if (scoreChanged || statusChanged || (!dbMatch.fotmob_id && fm.id)) {
+          await pool.query(
+            `UPDATE matches
+             SET home_score = COALESCE($1, home_score),
+                 away_score = COALESCE($2, away_score),
+                 status = $3,
+                 fotmob_id = COALESCE(fotmob_id, $4),
+                 updated_at = NOW()
+             WHERE id = $5`,
+            [homeScore, awayScore, newStatus, fm.id, dbMatch.id]
+          );
+
+          updatedCount++;
+          console.log(
+            `[FotMob Live Polling] Match ${dbMatch.id} (${dbMatch.home_team} vs ${dbMatch.away_team}) updated: status=${newStatus}, score=${homeScore}-${awayScore} (fotmobId: ${fm.id})`
+          );
+
+          if (newStatus === 'FINISHED' && dbMatch.status !== 'FINISHED') {
+            newlyFinishedMatches.push({ id: dbMatch.id, homeScore, awayScore });
+          }
+
+          if (scoreChanged && typeof reconcileScoreCorrections === 'function') {
+            try {
+              await reconcileScoreCorrections(dbMatch.id, homeScore, awayScore);
+            } catch (reconErr) {
+              console.error(`[FotMob Live Polling] Score reconciliation error for match ${dbMatch.id}:`, reconErr.message);
+            }
+          }
+        }
+      } catch (matchErr) {
+        console.error(`[FotMob Live Polling] Error processing match ${dbMatch.id}:`, matchErr.message);
+      }
+    }
+
+    console.log(`[FotMob Live Polling] Cycle complete: updated ${updatedCount} matches.`);
+
+    // Trigger settlement if matches completed
+    if (newlyFinishedMatches.length > 0 && typeof settleFinishedMatches === 'function') {
+      try {
+        console.log(`[FotMob Live Polling] Triggering settlement for ${newlyFinishedMatches.length} newly finished matches...`);
+        await settleFinishedMatches();
+      } catch (settleErr) {
+        console.error('[FotMob Live Polling] Settlement execution error:', settleErr.message);
+      }
+    }
+  } catch (err) {
+    console.error('[FotMob Live Polling] Uncaught cycle error:', err.message);
+  } finally {
+    fotmobLivePollingRunning = false;
+  }
+}
+
 module.exports = {
   FOTMOB_API_BASE,
   FOTMOB_IMAGE_BASE,
@@ -376,5 +603,6 @@ module.exports = {
   extractPlayerEventsMap,
   parseFotmobLineup,
   findFotmobMatchId,
-  fetchFotmobLineup
+  fetchFotmobLineup,
+  smartLivePollingFotmob
 };

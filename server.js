@@ -10,7 +10,7 @@ const cron = require('node-cron');
 const { Pool } = require('pg');
 const oddsProvider = require('./oddsProvider');
 const { initFlashscoreSync, syncFlashscoreSchedule, smartLivePolling, fetchMatchLiveDetails, bigIntToFlashscoreId } = require('./sync-flashscore');
-const { fetchFotmobLineup } = require('./sync-fotmob');
+const { fetchFotmobLineup, smartLivePollingFotmob } = require('./sync-fotmob');
 const { initTunisiaSync } = require('./sync-tunisia');
 
 const {
@@ -1062,22 +1062,34 @@ app.get(
     let bestLineups = hasLineupsInDB ? row.match_lineups : null;
     let liveDetails = null;
 
+    let liveStatus = row.status;
+    let liveHomeScore = row.home_score;
+    let liveAwayScore = row.away_score;
+
     if (needsLineups || needsLiveMatchUpdate) {
-      // 1. FotMob is the sole and primary source for authentic match lineups
-      if (needsLineups && typeof fetchFotmobLineup === 'function') {
+      // 1. FotMob is the sole and primary source for authentic match lineups and live scores
+      if (typeof fetchFotmobLineup === 'function') {
         try {
-          console.log(`[API /details] Attempting FotMob lineups for ${row.home_team} vs ${row.away_team} (matchId: ${matchId}, date: ${row.utc_date})...`);
+          console.log(`[API /details] Attempting FotMob lookup for ${row.home_team} vs ${row.away_team} (matchId: ${matchId}, date: ${row.utc_date})...`);
           const fotmobLineup = await fetchFotmobLineup(row.home_team, row.away_team, row.utc_date);
           if (hasUsableLineups(fotmobLineup)) {
             bestLineups = fotmobLineup;
             console.log(`[API /details] FotMob lineups successfully retrieved for ${row.home_team} vs ${row.away_team} (${bestLineups.startingHome.length} home starters)`);
           }
+          if (fotmobLineup?.scores && fotmobLineup.scores.home !== null && fotmobLineup.scores.away !== null) {
+            liveHomeScore = fotmobLineup.scores.home;
+            liveAwayScore = fotmobLineup.scores.away;
+            console.log(`[API /details] Extracted FotMob current score for match ${matchId}: ${liveHomeScore} - ${liveAwayScore}`);
+          }
+          if (fotmobLineup?.status) {
+            liveStatus = fotmobLineup.status;
+          }
         } catch (fotmobErr) {
-          console.warn(`[API /details] FotMob lineups lookup error for match ${matchId}:`, fotmobErr.message);
+          console.warn(`[API /details] FotMob lookup error for match ${matchId}:`, fotmobErr.message);
         }
       }
 
-      // 2. Fetch live match stats/scores if live or kickoff near/past
+      // 2. Fetch live match stats/incidents if live or kickoff near/past
       if (needsLiveMatchUpdate && rawFlashId && typeof fetchMatchLiveDetails === 'function') {
         try {
           console.log(`[API /details] Fetching live details from Flashscore for ${rawFlashId} (matchId: ${matchId})...`);
@@ -1091,27 +1103,22 @@ app.get(
       const hasStats = Array.isArray(liveDetails?.stats) && liveDetails.stats.length > 0;
       const hasIncidents = Array.isArray(liveDetails?.incidents) && liveDetails.incidents.length > 0;
 
-      let liveStatus = row.status;
-      let liveHomeScore = row.home_score;
-      let liveAwayScore = row.away_score;
       if (liveDetails?.scores && liveDetails.scores.home !== null && liveDetails.scores.away !== null) {
-        if (row.status === 'SCHEDULED' || row.status === 'TIMED') {
-          liveStatus = 'IN_PLAY';
-          liveHomeScore = liveDetails.scores.home;
-          liveAwayScore = liveDetails.scores.away;
-        } else if (isLive) {
+        if (liveHomeScore === null || isLive) {
           liveHomeScore = liveDetails.scores.home;
           liveAwayScore = liveDetails.scores.away;
         }
       }
 
+      const scoreOrStatusChanged = liveHomeScore !== row.home_score || liveAwayScore !== row.away_score || liveStatus !== row.status;
+
       // 3. Immediate Database Persistence
-      // If we obtained usable lineups for this match (finished or in play), update PostgreSQL immediately
-      if (hasNewlyFetchedLineups || (hasUsableLineups(bestLineups) && isLive)) {
+      // If we obtained usable lineups for this match (finished or in play), OR scores/status changed, update PostgreSQL immediately
+      if (hasNewlyFetchedLineups || (hasUsableLineups(bestLineups) && isLive) || scoreOrStatusChanged) {
         try {
           await pool.query(
             `UPDATE matches
-             SET match_lineups = $1::jsonb,
+             SET match_lineups = COALESCE($1::jsonb, match_lineups),
                  flashscore_id = COALESCE(flashscore_id, $2),
                  match_stats = COALESCE($3::jsonb, match_stats),
                  match_incidents = COALESCE($4::jsonb, match_incidents),
@@ -1121,7 +1128,7 @@ app.get(
                  updated_at = NOW()
              WHERE id = $8`,
             [
-              JSON.stringify(bestLineups),
+              hasUsableLineups(bestLineups) ? JSON.stringify(bestLineups) : null,
               rawFlashId,
               hasStats ? JSON.stringify(liveDetails.stats) : null,
               hasIncidents ? JSON.stringify(liveDetails.incidents) : null,
@@ -1131,17 +1138,17 @@ app.get(
               matchId
             ]
           );
-          row.match_lineups = bestLineups;
+          if (hasUsableLineups(bestLineups)) row.match_lineups = bestLineups;
           if (hasStats) row.match_stats = liveDetails.stats;
           if (hasIncidents) row.match_incidents = liveDetails.incidents;
           row.status = liveStatus;
           row.home_score = liveHomeScore;
           row.away_score = liveAwayScore;
-          console.log(`[API /details] Successfully saved lineups to DB for match ${matchId} (source: ${bestLineups.source || 'flashscore'}, isFinished: ${isFinished})`);
+          console.log(`[API /details] Successfully saved FotMob details to DB for match ${matchId} (score: ${liveHomeScore}-${liveAwayScore}, status: ${liveStatus})`);
         } catch (dbErr) {
           console.error(`[API /details] Database update error for match ${matchId}:`, dbErr.message);
         }
-      } else if (hasStats || hasIncidents || liveHomeScore !== row.home_score || liveStatus !== row.status) {
+      } else if (hasStats || hasIncidents) {
         try {
           await pool.query(
             `UPDATE matches
@@ -2011,6 +2018,18 @@ const server = app.listen(PORT, async () => {
     cron,
     settleFinishedMatches,
     reconcileScoreCorrections
+  });
+
+  // Trigger initial FotMob live polling cycle on boot
+  smartLivePollingFotmob(pool, { settleFinishedMatches, reconcileScoreCorrections }).catch((err) => {
+    console.error('[FotMob Live Polling] On-boot cycle error:', err.message);
+  });
+
+  // Schedule FotMob Live Radar polling every 1 minute
+  cron.schedule('*/1 * * * *', () => {
+    smartLivePollingFotmob(pool, { settleFinishedMatches, reconcileScoreCorrections }).catch((err) => {
+      console.error('[FotMob Live Polling] Scheduled 1m cycle error:', err.message);
+    });
   });
 });
 

@@ -3,6 +3,7 @@ require('dotenv').config();
 const { Pool } = require('pg');
 const { teamRatings, matchLambdas, buildMatchMarketsPoints } = require('./pricingEngine');
 const { MASTER_CRESTS } = require('./team-crests-master');
+const { smartLivePollingFotmob } = require('./sync-fotmob');
 
 // Flashscore Raw Feed Endpoints & Config
 const FLASHSCORE_BASE_URL = 'https://local-global.flashscore.ninja/2/x/feed';
@@ -1057,6 +1058,15 @@ async function smartLivePolling(
     console.log(
       `[Flashscore Live Polling] Detected ${activeMatches.length} active/live matches in progress. Querying live feed...`
     );
+
+    // Primary Live Radar: FotMob Live Polling (unrestricted, real scores, live time)
+    try {
+      if (typeof smartLivePollingFotmob === 'function') {
+        await smartLivePollingFotmob(pool, { settleFinishedMatches, reconcileScoreCorrections, fetcher });
+      }
+    } catch (fotmobErr) {
+      console.warn('[Live Polling] FotMob radar error:', fotmobErr.message);
+    }
 
     // 2. Fetch Day 0 feed (all updates for today's active matches)
     const feedText = await fetchFlashscoreFeed('f_1_0_2_en_1', { fetcher });

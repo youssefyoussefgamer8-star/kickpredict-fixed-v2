@@ -10,6 +10,15 @@ export default function MatchCard({ match, user, lang, t, onSaved, onError }) {
   const markets = match.markets_points;
   const settled = match.settled_outcomes;
   const finished = match.status === 'FINISHED' || match.live_clock === 'FT';
+  const isLive =
+    match.status === 'IN_PLAY' ||
+    match.status === 'PAUSED' ||
+    match.status === 'LIVE' ||
+    match.status === '1H' ||
+    match.status === '2H' ||
+    match.status === 'HT' ||
+    Boolean(match.live_clock) ||
+    Number.isFinite(match.live_seconds);
   const readOnly = !user || match.is_locked;
 
   const [outcome, setOutcome] = useState(pred?.predicted_outcome ?? null);
@@ -343,11 +352,11 @@ export default function MatchCard({ match, user, lang, t, onSaved, onError }) {
             )}
 
             <div className="flex items-center justify-center min-w-[62px] h-10 rounded-xl bg-[#0f1214] border border-white/10 px-2.5 font-mono shadow-inner">
-              {match.is_locked && match.home_score != null && match.away_score != null ? (
+              {(isLive || finished || match.is_locked || match.status === 'LIVE' || match.status === 'IN_PLAY' || match.status === 'PAUSED' || match.status === 'FINISHED') && (match.home_score != null || isLive || finished) ? (
                 <div className="flex items-center gap-1.5 text-lg font-black text-white">
-                  <span>{match.home_score}</span>
+                  <span>{match.home_score ?? 0}</span>
                   <span className="text-[#53FC18] text-xs font-bold">:</span>
-                  <span>{match.away_score}</span>
+                  <span>{match.away_score ?? 0}</span>
                 </div>
               ) : scoreFilled ? (
                 <div className="flex items-center gap-1 text-base font-black text-[#53FC18]">
